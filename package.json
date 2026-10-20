@@ -1,0 +1,141 @@
+{
+  "name": "adonis-ai",
+  "version": "1.1.0",
+  "description": "Production-ready AI & Agentic workflow kit for AdonisJS 7 (Vercel AI SDK v7, multi-provider fallbacks, ACP & token budget enforcement)",
+  "keywords": [
+    "adonisjs",
+    "adonisjs-7",
+    "ai",
+    "llm",
+    "prism",
+    "laravel-ai",
+    "models-dev",
+    "acp",
+    "agent-client-protocol",
+    "mcp",
+    "skills",
+    "agents",
+    "streaming",
+    "sse",
+    "circuit-breaker",
+    "token-budget",
+    "tool-guard",
+    "hitl",
+    "guardrails"
+  ],
+  "author": "Ivan Glazyrin <glazrus97@gmail.com>",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "import": "./dist/src/index.js"
+    },
+    "./guard": {
+      "types": "./dist/src/guard/index.d.ts",
+      "import": "./dist/src/guard/index.js"
+    },
+    "./budget": {
+      "types": "./dist/src/budget/index.d.ts",
+      "import": "./dist/src/budget/index.js"
+    },
+    "./services/main": {
+      "types": "./dist/services/main.d.ts",
+      "import": "./dist/services/main.js"
+    },
+    "./providers/ai_provider": {
+      "types": "./dist/providers/ai_provider.d.ts",
+      "import": "./dist/providers/ai_provider.js"
+    },
+    "./commands": {
+      "types": "./dist/commands/main.d.ts",
+      "import": "./dist/commands/main.js"
+    },
+    "./types": {
+      "types": "./dist/src/types.d.ts",
+      "import": "./dist/src/types.js"
+    },
+    "./catalog": {
+      "types": "./dist/src/catalog/index.d.ts",
+      "import": "./dist/src/catalog/index.js"
+    },
+    "./acp": {
+      "types": "./dist/src/acp/index.d.ts",
+      "import": "./dist/src/acp/index.js"
+    },
+    "./agents": {
+      "types": "./dist/src/agents/index.d.ts",
+      "import": "./dist/src/agents/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "typecheck": "tsc --noEmit",
+    "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
+    "test:regression": "node tests/regression.mjs && node tests/regression_adonis.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/IvanGlazyrin/adonis-ai.git"
+  },
+  "bugs": {
+    "url": "https://github.com/IvanGlazyrin/adonis-ai/issues"
+  },
+  "homepage": "https://github.com/IvanGlazyrin/adonis-ai#readme",
+  "peerDependencies": {
+    "@adonisjs/core": "^7.0.0",
+    "@ai-sdk/anthropic": "^1.0.0 || ^2.0.0",
+    "@ai-sdk/google": "^1.0.0 || ^2.0.0",
+    "@ai-sdk/groq": "^1.0.0 || ^2.0.0",
+    "@ai-sdk/openai": "^1.0.0 || ^2.0.0",
+    "@ai-sdk/openai-compatible": "^1.0.0 || ^2.0.0",
+    "@mcpc-tech/acp-ai-provider": ">=0.1.0"
+  },
+  "dependencies": {
+    "ai": "^7.0.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.25.76 || ^4.1.8"
+  },
+  "devDependencies": {
+    "@adonisjs/core": "^7.4.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0 || ^6.0.0"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "sideEffects": [
+    "./dist/services/main.js"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependenciesMeta": {
+    "@ai-sdk/anthropic": {
+      "optional": true
+    },
+    "@ai-sdk/google": {
+      "optional": true
+    },
+    "@ai-sdk/groq": {
+      "optional": true
+    },
+    "@ai-sdk/openai": {
+      "optional": true
+    },
+    "@ai-sdk/openai-compatible": {
+      "optional": true
+    },
+    "@mcpc-tech/acp-ai-provider": {
+      "optional": true
+    }
+  }
+}

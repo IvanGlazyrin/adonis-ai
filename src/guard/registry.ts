@@ -1,0 +1,268 @@
+import type {
+  ActionGuard,
+  Logger,
+  ToolDefinition,
+  ToolPermission,
+} from './types.js'
+import type { ConfirmationService } from './confirmation.js'
+import { PolicyViolationError } from './errors.js'
+
+export interface ToolAccessOptions {
+  guard?: ActionGuard
+  confirmation?: ConfirmationService
+  sessionId?: string
+  timeoutMs?: number
+  /** Agent whose permission matrix applies in `getToolsByList()`. */
+  agentName?: string
+}
+
+export interface WrapToolOptions extends ToolAccessOptions {
+  /**
+   * Effective permission of the tool. `ask` requires a `confirmation` service (otherwise every
+   * call is refused with `PolicyViolationError`); `deny` refuses every call.
+   * Defaults to `allow` because `wrapTool()` is a low-level primitive; the registry's
+   * `getToolsForAgent()` / `getToolsByList()` always pass the resolved permission.
+   */
+  permission?: ToolPermission
+}
+
+export interface ToolRegistryOptions {
+  logger?: Logger
+  askByDefault?: string[]
+  /**
+   * Permission of tools that have neither an agent-specific nor a tool-level permission.
+   * Default: `deny` (fail-closed).
+   */
+  defaultPermission?: ToolPermission
+}
+
+/**
+ * Registry for managing AI agent tools, access permissions, policy guards,
+ * and Human-in-the-loop confirmation hooks.
+ *
+ * Fail-closed: unknown permissions resolve to `deny`, `ask` without a confirmation service
+ * never executes, and every tool that is handed out goes through the policy guard.
+ */
+export class ToolRegistry {
+  private tools: Map<string, ToolDefinition> = new Map()
+  private agentPermissions: Map<string, Map<string, ToolPermission>> = new Map()
+  private defaultPermissions: Map<string, ToolPermission> = new Map()
+  private askByDefault: Set<string>
+  private defaultPermission: ToolPermission
+  private logger?: Logger
+
+  constructor(opts: ToolRegistryOptions = {}) {
+    this.logger = opts.logger
+    this.askByDefault = new Set(opts.askByDefault ?? [])
+    this.defaultPermission = opts.defaultPermission ?? 'deny'
+  }
+
+  setLogger(logger: Logger): void {
+    this.logger = logger
+  }
+
+  registerTool(name: string, tool: ToolDefinition, defaultPermission?: ToolPermission): this {
+    this.tools.set(name, tool)
+    if (defaultPermission) {
+      this.defaultPermissions.set(name, defaultPermission)
+    }
+    return this
+  }
+
+  registerTools(
+    tools: Record<string, ToolDefinition>,
+    defaultPermission?: ToolPermission
+  ): this {
+    for (const [name, tool] of Object.entries(tools)) {
+      this.registerTool(name, tool, defaultPermission)
+    }
+    return this
+  }
+
+  setAgentPermissions(agentName: string, permissions: Record<string, ToolPermission>): this {
+    const map = this.agentPermissions.get(agentName) ?? new Map<string, ToolPermission>()
+    for (const [tool, perm] of Object.entries(permissions)) {
+      map.set(tool, perm)
+    }
+    this.agentPermissions.set(agentName, map)
+    return this
+  }
+
+  getAgentPermission(agentName: string, toolName: string): ToolPermission {
+    const agentMap = this.agentPermissions.get(agentName)
+    if (agentMap?.has(toolName)) {
+      return agentMap.get(toolName)!
+    }
+    if (this.defaultPermissions.has(toolName)) {
+      return this.defaultPermissions.get(toolName)!
+    }
+    if (this.askByDefault.has(toolName)) {
+      return 'ask'
+    }
+    return this.defaultPermission
+  }
+
+  /**
+   * Wraps a tool with policy guard validation and, for `ask`, Human-in-the-loop confirmation.
+   * Tools without an `execute` function (provider-executed / client-side tools) are returned as is.
+   */
+  wrapTool(name: string, tool: ToolDefinition, options: WrapToolOptions = {}): ToolDefinition {
+    const originalExecute = tool.execute?.bind(tool)
+    if (!originalExecute) {
+      return tool
+    }
+
+    const permission = options.permission ?? 'allow'
+
+    return {
+      ...tool,
+      execute: async (args: unknown, execOptions?: any) => {
+        // 0. Defense in depth: a denied tool never runs, even if it slipped past filtering.
+        if (permission === 'deny') {
+          throw new PolicyViolationError(name, 'permission is "deny"')
+        }
+
+        // 1. Guard check (also reserves a call slot in guards that support it)
+        if (options.guard) {
+          const violation = options.guard.check(name, args)
+          if (violation) {
+            this.logger?.warn?.(
+              `[ToolRegistry] Tool "${name}" call rejected by guard: ${violation}`,
+              args
+            )
+            return {
+              error: `Rejected by policy guard: ${violation}. Adjust parameters to match approved bounds.`,
+            }
+          }
+        }
+
+        // From here on a call slot may be held in the guard: it must end in exactly one
+        // record() (tool ran) or release() (tool did not run).
+        let executed = false
+        let slotSettled = false
+        const settleSlot = (result: unknown): void => {
+          if (slotSettled) return
+          slotSettled = true
+          options.guard?.record?.(name, result)
+        }
+
+        try {
+          // 2. Human-in-the-loop confirmation. Fail-closed: `ask` without a service never runs.
+          if (permission === 'ask') {
+            if (!options.confirmation) {
+              throw new PolicyViolationError(
+                name,
+                'permission is "ask" but no ConfirmationService was provided'
+              )
+            }
+
+            this.logger?.info?.(`[ToolRegistry] Requesting confirmation for "${name}"`)
+            const confirmation = await options.confirmation.waitForResponse(
+              {
+                sessionId: options.sessionId,
+                toolName: name,
+                action: tool.description || name,
+                params: (args as Record<string, unknown>) ?? {},
+              },
+              options.timeoutMs,
+              execOptions?.abortSignal
+            )
+
+            if (confirmation.status !== 'approved') {
+              this.logger?.warn?.(
+                `[ToolRegistry] Tool "${name}" execution not approved: ${confirmation.status} (${confirmation.reason ?? 'no reason'})`
+              )
+              return {
+                error: `Tool "${name}" was not executed: ${confirmation.status}. ${confirmation.reason ?? ''}`.trim(),
+              }
+            }
+          }
+
+          // 3. Execute underlying tool
+          executed = true
+          const result = await originalExecute(args, execOptions)
+
+          // 4. Record execution stats in guard
+          settleSlot(result)
+          return result
+        } catch (err) {
+          if (executed) {
+            settleSlot({ error: err instanceof Error ? err.message : String(err) })
+          }
+          throw err
+        } finally {
+          if (!slotSettled && options.guard) {
+            slotSettled = true
+            options.guard.release?.(name)
+          }
+        }
+      },
+    }
+  }
+
+  /**
+   * Returns the tools an agent may use. `deny` tools are omitted, `ask` tools require
+   * confirmation, and every returned tool is checked by `options.guard` when one is provided.
+   */
+  getToolsForAgent(
+    agentName: string,
+    options: ToolAccessOptions = {}
+  ): Record<string, ToolDefinition> {
+    const result: Record<string, ToolDefinition> = {}
+
+    for (const [name, tool] of this.tools.entries()) {
+      const wrapped = this.resolveTool(agentName, name, tool, options)
+      if (wrapped) result[name] = wrapped
+    }
+
+    return result
+  }
+
+  /**
+   * Returns the requested tools, subject to the permission matrix of `options.agentName`
+   * (or the tool-level / registry defaults when no agent is given).
+   */
+  getToolsByList(
+    toolNames: string[],
+    options: ToolAccessOptions = {}
+  ): Record<string, ToolDefinition> {
+    const result: Record<string, ToolDefinition> = {}
+
+    for (const name of toolNames) {
+      const tool = this.tools.get(name)
+      if (!tool) {
+        this.logger?.warn?.(`[ToolRegistry] Unknown tool requested: "${name}"`)
+        continue
+      }
+
+      const wrapped = this.resolveTool(options.agentName ?? '', name, tool, options)
+      if (wrapped) result[name] = wrapped
+    }
+
+    return result
+  }
+
+  private resolveTool(
+    agentName: string,
+    name: string,
+    tool: ToolDefinition,
+    options: ToolAccessOptions
+  ): ToolDefinition | null {
+    const permission = this.getAgentPermission(agentName, name)
+    if (permission === 'deny') {
+      return null
+    }
+
+    if (permission === 'ask' && !options.confirmation) {
+      this.logger?.warn?.(
+        `[ToolRegistry] Tool "${name}" requires confirmation but no ConfirmationService was provided; calls will be refused.`
+      )
+    }
+
+    if (permission === 'allow' && !options.guard) {
+      return tool
+    }
+
+    return this.wrapTool(name, tool, { ...options, permission })
+  }
+}

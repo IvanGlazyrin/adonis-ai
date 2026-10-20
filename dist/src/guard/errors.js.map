@@ -1,0 +1,1 @@
+{"version":3,"file":"errors.js","sourceRoot":"","sources":["../../../src/guard/errors.ts"],"names":[],"mappings":"AAAA;;;GAGG;AACH,MAAM,OAAO,oBAAqB,SAAQ,KAAK;IAI3B;IAHT,IAAI,GAAG,oBAAoB,CAAA;IAEpC,YACkB,QAAgB,EAChC,OAAe;QAEf,KAAK,CAAC,SAAS,QAAQ,wBAAwB,OAAO,EAAE,CAAC,CAAA;QAHzC,aAAQ,GAAR,QAAQ,CAAQ;QAIhC,IAAI,CAAC,IAAI,GAAG,sBAAsB,CAAA;IACpC,CAAC;CACF"}

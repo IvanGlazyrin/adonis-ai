@@ -1,0 +1,291 @@
+# adonis-ai
+
+> **Production-grade AI & Agentic workflow toolkit for AdonisJS 7**, powered by Vercel AI SDK v7, multi-provider cascading fallback, circuit breakers, tool security guardrails, token budget tracking, models.dev live catalog, and ACP (Agent Client Protocol) coding agents.
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![AdonisJS](https://img.shields.io/badge/AdonisJS-7.x-5A45FF.svg)](https://adonisjs.com)
+[![TypeScript](https://img.shields.io/badge/TypeScript-ES2022%20%2F%20NodeNext-blue.svg)](https://www.typescriptlang.org)
+[![Vercel AI SDK](https://img.shields.io/badge/Vercel%20AI%20SDK-v7.x-black.svg)](https://sdk.vercel.ai)
+[![Node](https://img.shields.io/badge/node-%3E%3D22.0.0-brightgreen.svg)](https://nodejs.org)
+
+---
+
+## Highlights & Architectural Comparison
+
+While frameworks like **Laravel AI** and **Prism** bring basic prompt-level abstractions to PHP, enterprise production systems require strict SRE resilience, tool execution guardrails, cost guarantees, and streaming protocol integrity. **`adonis-ai`** is built from the ground up for high-concurrency Node.js microservices:
+
+| Feature | `adonis-ai` (AdonisJS 7) | Laravel AI / Prism (PHP) |
+| :--- | :--- | :--- |
+| **Foundation Engine** | **Vercel AI SDK v7** (native Node.js async streams & tool calls) | Custom cURL/Guzzle wrappers |
+| **Circuit Breaker** | **Per `provider:model` key** (isolated half-open state, probe limits) | Global or none |
+| **Cascading Fallbacks** | **Safe**: never replays side-effects if tool calls already started | Retries from scratch (risk of double actions) |
+| **Tool Security (Guardrails)** | **Fail-closed** with Human-in-the-Loop (HITL), concurrent slots | Basic parameter mapping |
+| **Token Budget & Cost** | **Live USD pricing**, ring-buffer memory, cache-read & reasoning tokens | Raw token count or static tables |
+| **Catalog Auto-Discovery** | **models.dev integration** with TTL cache & atomic writes | Static configuration files |
+| **Agent Protocols** | **ACP (Agent Client Protocol)** for Claude Code, opencode & subagents | Basic prompt templates |
+| **HTTP Streaming** | **`response.streamAI()` macro** with heartbeats, SSE frames & client-abort hook | PHP chunked response buffers |
+
+---
+
+## Architecture Overview
+
+```mermaid
+flowchart TD
+    UserApp["AdonisJS Controller / Service"] --> AiManager["AiManager (Singleton Service)"]
+    
+    subgraph SRE_Resilience ["SRE Resilience & Fallback Layer"]
+        AiManager --> CircuitBreaker["Circuit Breaker (provider:model)"]
+        CircuitBreaker --> FallbackCascade["Cascading Provider Fallback"]
+    end
+    
+    subgraph Execution_Layer ["Execution & Agent Layer"]
+        FallbackCascade --> Providers["LLM Drivers (OpenAI, Anthropic, Google, Groq, ACP)"]
+        FallbackCascade --> AgentRunner["AgentRunner (Manifest + Skills)"]
+        AgentRunner --> ToolRegistry["Tool Registry (PolicyGuard)"]
+        ToolRegistry --> HITL["ConfirmationService (Human-in-the-Loop)"]
+    end
+
+    subgraph Observability_Cost ["Observability & Governance"]
+        Providers --> CostTracker["CostTracker (Ring Buffer)"]
+        Providers --> BudgetEnforcer["BudgetEnforcer (Atomic Reservations)"]
+        AiManager -.-> ModelsDev["models.dev Catalog (Live Pricing & Limits)"]
+    end
+
+    subgraph Transport_Layer ["Transport Layer"]
+        AiManager --> SSE["response.streamAI() Macro (SSE / Heartbeats / Abort)"]
+    end
+```
+
+---
+
+## Installation
+
+```bash
+npm install adonis-ai
+# or
+pnpm add adonis-ai
+```
+
+Add the provider to `adonisrc.ts`:
+
+```ts
+export default defineConfig({
+  providers: [
+    // ...
+    () => import('adonis-ai/providers/ai_provider')
+  ]
+})
+```
+
+Configure your providers in `config/ai.ts`:
+
+```ts
+import env from '#start/env'
+import { defineConfig } from 'adonis-ai'
+
+export default defineConfig({
+  default: 'openai',
+  providers: {
+    openai: {
+      driver: 'openai',
+      apiKey: env.get('OPENAI_API_KEY'),
+      defaultModel: 'gpt-4o',
+    },
+    anthropic: {
+      driver: 'anthropic',
+      apiKey: env.get('ANTHROPIC_API_KEY'),
+      defaultModel: 'claude-3-7-sonnet-20250219',
+    },
+  },
+  // Automatically fallback to Anthropic if OpenAI is throttled (429) or down (5xx)
+  fallbackCascade: ['anthropic'],
+  circuitBreaker: {
+    failureThreshold: 5,
+    recoveryTimeoutMs: 30_000,
+    halfOpenMaxAttempts: 2,
+  },
+})
+```
+
+---
+
+## Core Capabilities
+
+### 1. Basic Generation & Multi-Provider Fallback
+
+Generate text with automatic token usage tracking and USD calculation:
+
+```ts
+import ai from 'adonis-ai/services/main'
+
+const result = await ai.generateText({
+  prompt: 'Explain vector indexing in 3 sentences',
+})
+
+console.log(result.text)
+console.log(`Duration: ${result.durationMs}ms, Cost: $${result.costUsd}`)
+console.log(`Tokens: in=${result.usage.inputTokens}, out=${result.usage.outputTokens}, cached=${result.usage.cacheReadTokens}`)
+```
+
+If OpenAI returns `429 Rate Limit` or `503 Service Unavailable`, `adonis-ai` automatically routes the request to `anthropic` with its configured model, recording circuit breaker metrics.
+
+---
+
+### 2. Structured Output with Zod Schema
+
+```ts
+import { z } from 'zod'
+import ai from 'adonis-ai/services/main'
+
+const resumeSchema = z.object({
+  fullName: z.string(),
+  skills: z.array(z.string()),
+  yearsOfExperience: z.number(),
+})
+
+const { object } = await ai.generateObject({
+  prompt: 'Extract candidate details: Ivan Glazyrin, 9 years in TS and Go',
+  schema: resumeSchema,
+})
+
+console.log(object.skills) // ['TypeScript', 'Go', ...]
+```
+
+---
+
+### 3. Server-Sent Events (SSE) Streaming in AdonisJS Controllers
+
+Use the built-in `response.streamAI()` macro:
+
+```ts
+import type { HttpContext } from '@adonisjs/core/http'
+import ai from 'adonis-ai/services/main'
+
+export default class ChatController {
+  async stream({ request, response }: HttpContext) {
+    const stream = await ai.streamText({
+      prompt: request.input('message'),
+      model: 'gpt-4o',
+    })
+
+    // Sets 'Content-Type: text/event-stream', sends heartbeat pings,
+    // and automatically calls stream.abort() if the client disconnects!
+    return response.streamAI(stream, {
+      heartbeatMs: 15_000,
+      mode: 'sse',
+    })
+  }
+}
+```
+
+---
+
+### 4. Tool Security Guardrails & Human-in-the-Loop (HITL)
+
+Prevent untrusted AI models from executing destructive operations:
+
+```ts
+import { ToolRegistry, ConfirmationService, PolicyGuard } from 'adonis-ai/guard'
+import { tool } from 'ai'
+import { z } from 'zod'
+
+const confirmationService = new ConfirmationService({ timeoutMs: 60_000 })
+const registry = new ToolRegistry(confirmationService)
+
+// Define tools
+registry.register(
+  'deploy_service',
+  tool({
+    description: 'Deploy service to cluster',
+    parameters: z.object({ cluster: z.string(), service: z.string() }),
+    execute: async ({ cluster, service }) => `Deployed ${service} to ${cluster}`,
+  }),
+  { permission: 'ask', maxCallsPerSession: 1 } // Requires human confirmation!
+)
+
+// When the model calls 'deploy_service', confirmationService pauses execution,
+// emits a confirmation request event, and resumes only when approved!
+```
+
+---
+
+### 5. Cost Tracking & Atomic Token Budget Enforcement
+
+```ts
+import { CostTracker, BudgetEnforcer } from 'adonis-ai/budget'
+
+const tracker = new CostTracker({ maxRecords: 10_000 })
+const enforcer = new BudgetEnforcer({
+  maxCostUsd: 100.0,
+  maxInputTokens: 5_000_000,
+  maxOutputTokens: 1_000_000,
+})
+
+// Atomic pre-flight reservation prevents concurrent race conditions
+const reservation = enforcer.reserve('user-session-42', { estimatedCostUsd: 0.05 })
+if (!reservation.allowed) {
+  throw new Error('Budget exceeded')
+}
+
+try {
+  // run LLM request...
+  enforcer.settle(reservation.reservationId, { costUsd: 0.038 })
+} catch (e) {
+  enforcer.release(reservation.reservationId)
+}
+```
+
+---
+
+### 6. ACP (Agent Client Protocol) Coding Agents
+
+Run subagents using local CLI tools like **Claude Code**, **opencode**, or custom ACP binaries with sanitized environments:
+
+```ts
+import { AgentRunner, AgentLoader } from 'adonis-ai/agents'
+
+const loader = new AgentLoader({
+  configsDir: './resources/agent-configs',
+  skillsDir: './resources/agent-skills',
+})
+
+const runner = new AgentRunner(aiManager, registry, loader)
+const execution = await runner.run({
+  agentId: 'code-reviewer',
+  userPrompt: 'Audit packages/adonis-ai for race conditions',
+})
+```
+
+---
+
+## Ace CLI Commands
+
+`adonis-ai` registers helpful Ace commands:
+
+```bash
+# Test connectivity, latency, and model availability across configured providers
+node ace ai:test
+
+# Scaffold a new production agent prompt and schema
+node ace make:ai-agent backend-architect --mode=primary
+```
+
+---
+
+## Testing & Quality
+
+The package includes a comprehensive regression test suite with 100% pass rate:
+
+```bash
+npm run test:regression
+```
+
+- **Token Budget**: Rate calculations, cache-read discounts, reasoning token surcharges, ring-buffer bounded memory.
+- **Tool Guard**: Policy enforcement (`allow`, `ask`, `deny`), concurrency slots, fail-closed handlers, session validation.
+- **Adonis AI Core**: Cascading failovers without duplicate side-effects, SSE keepalive frames, models.dev live discovery & TTL, ACP command sanitization.
+
+---
+
+## License
+
+MIT © [Ivan Glazyrin](https://github.com/IvanGlazyrin) (glazrus97@gmail.com)

@@ -1,0 +1,668 @@
+import { mkdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { DEFAULT_MODEL_PRICING } from '../budget/pricing.js';
+import { getAllAcpProviderEntries } from '../acp/acp_agents.js';
+const DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
+/** Built-in fallback data is retried quickly instead of being pinned in memory forever. */
+const FALLBACK_TTL_MS = 60_000;
+const MODELS_DEV_URL = 'https://models.dev/api.json';
+/** Maps config driver / provider names to models.dev provider ids. */
+const PROVIDER_ALIASES = Object.freeze({
+    gemini: 'google',
+    'google-gemini': 'google',
+    'google-generative-ai': 'google',
+    claude: 'anthropic',
+    'openai-compatible': 'openai',
+});
+/**
+ * Resolves a provider/driver name (e.g. config driver `gemini`) to the models.dev provider id
+ * (`google`). Unknown names are returned unchanged.
+ */
+export function resolveCatalogProviderId(providerId) {
+    return Object.hasOwn(PROVIDER_ALIASES, providerId) ? PROVIDER_ALIASES[providerId] : providerId;
+}
+function isPlainObject(value) {
+    return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+/**
+ * Keeps only providers that look like models.dev providers (`{ models: { ... } }`).
+ * Returns `null` when nothing usable remains.
+ */
+function sanitizeCatalog(json) {
+    if (!isPlainObject(json))
+        return null;
+    const catalog = {};
+    for (const [id, provider] of Object.entries(json)) {
+        if (!isPlainObject(provider) || !isPlainObject(provider.models))
+            continue;
+        const models = {};
+        for (const [modelId, model] of Object.entries(provider.models)) {
+            if (isPlainObject(model)) {
+                models[modelId] = { ...model, id: typeof model.id === 'string' ? model.id : modelId };
+            }
+        }
+        catalog[id] = {
+            ...provider,
+            id: typeof provider.id === 'string' ? provider.id : id,
+            name: typeof provider.name === 'string' ? provider.name : id,
+            env: Array.isArray(provider.env) ? provider.env : [],
+            models,
+        };
+    }
+    return Object.keys(catalog).length > 0 ? catalog : null;
+}
+function toCatalogCost(pricing) {
+    return {
+        input: pricing.input,
+        output: pricing.output,
+        cache_read: pricing.cacheReadCostPer1M,
+        cache_write: pricing.cacheWriteCostPer1M,
+    };
+}
+/** Fallback catalog prices come from token-budget's table so the two can never drift apart. */
+function costOf(model) {
+    const pricing = Object.hasOwn(DEFAULT_MODEL_PRICING, model) ? DEFAULT_MODEL_PRICING[model] : undefined;
+    return pricing ? toCatalogCost(pricing) : undefined;
+}
+export class ModelsDevSource {
+    #cache = null;
+    #cacheKey = null;
+    #cacheAt = null;
+    #cacheIsFallback = false;
+    #inFlight = null;
+    #inFlightKey = null;
+    #logger;
+    #customCachePath;
+    #customOverridePath;
+    #ttlMs;
+    #fallback = null;
+    constructor(options) {
+        this.#logger = options?.logger;
+        this.#customCachePath = options?.cachePath;
+        this.#customOverridePath = options?.overridePath;
+        this.#ttlMs =
+            typeof options?.ttlMs === 'number' && options.ttlMs > 0 ? options.ttlMs : DEFAULT_TTL_MS;
+    }
+    setLogger(logger) {
+        this.#logger = logger;
+    }
+    async load(options = {}) {
+        const preferCache = options.preferCache ?? true;
+        const source = await this.#getSource(options);
+        if (preferCache && this.#isMemoryFresh(source.key)) {
+            this.#logger?.debug?.(`[ModelsDevSource] returning cached models for ${source.key}`);
+            return this.#cache;
+        }
+        if (this.#inFlight && this.#inFlightKey === source.key) {
+            this.#logger?.debug?.(`[ModelsDevSource] waiting for in-flight load of ${source.key}`);
+            return this.#inFlight;
+        }
+        return this.#loadSource(source, { forceRemote: false });
+    }
+    async refresh(options = {}) {
+        const source = await this.#getSource(options);
+        if (this.#inFlight && this.#inFlightKey === source.key) {
+            this.#logger?.debug?.(`[ModelsDevSource] deduplicating refresh for ${source.key}`);
+            return this.#inFlight;
+        }
+        const forceRemote = options.forceRemote ?? false;
+        if (forceRemote && this.#cache && this.#cacheKey === source.key && this.#cacheAt) {
+            const ageMs = Date.now() - this.#cacheAt;
+            if (!this.#cacheIsFallback && ageMs < 60_000) {
+                this.#logger?.info?.(`[ModelsDevSource] refresh skipped — in-memory cache is fresh (${Math.round(ageMs / 1000)}s)`);
+                return this.#cache;
+            }
+        }
+        if (forceRemote && !source.overridePath) {
+            try {
+                const fileStat = await stat(source.cachePath);
+                const fileAgeMs = Date.now() - fileStat.mtimeMs;
+                if (fileAgeMs < 120_000) {
+                    const local = await this.#readLocalCache(source.cachePath);
+                    if (local) {
+                        this.#logger?.info?.(`[ModelsDevSource] refresh: file fresh (${Math.round(fileAgeMs / 1000)}s), using local cache`);
+                        this.#store(source.key, this.#injectSystemProviders(local), false);
+                        return this.#cache;
+                    }
+                }
+            }
+            catch {
+                // file doesn't exist or stat failed, fall through to fetch
+            }
+        }
+        return this.#loadSource(source, { forceRemote });
+    }
+    resetCache() {
+        this.#cache = null;
+        this.#cacheKey = null;
+        this.#cacheAt = null;
+        this.#cacheIsFallback = false;
+        this.#inFlight = null;
+        this.#inFlightKey = null;
+    }
+    async getProvider(providerId) {
+        const catalog = await this.load();
+        return this.#provider(catalog, providerId);
+    }
+    async getModel(providerId, modelId) {
+        const catalog = await this.load();
+        const catalogId = resolveCatalogProviderId(providerId);
+        const provider = this.#provider(catalog, catalogId);
+        if (!provider)
+            return undefined;
+        const raw = Object.hasOwn(provider.models ?? {}, modelId) ? provider.models[modelId] : undefined;
+        if (!raw)
+            return undefined;
+        return this.#normalizeModel(catalogId, provider.name, raw);
+    }
+    async getContextLimit(providerId, modelId) {
+        const model = await this.getModel(providerId, modelId);
+        return model?.contextLimit;
+    }
+    async supportsToolCall(providerId, modelId) {
+        const model = await this.getModel(providerId, modelId);
+        return model?.toolCall ?? false;
+    }
+    async getModelPricing(providerId, modelId) {
+        const model = await this.getModel(providerId, modelId);
+        return model?.pricing;
+    }
+    async listProviders() {
+        const catalog = await this.load();
+        return Object.values(catalog);
+    }
+    async listModels(providerId) {
+        const catalog = await this.load();
+        const wanted = providerId ? resolveCatalogProviderId(providerId) : undefined;
+        const entries = [];
+        for (const [pId, provider] of Object.entries(catalog)) {
+            if (wanted && pId !== wanted)
+                continue;
+            for (const raw of Object.values(provider.models ?? {})) {
+                entries.push(this.#normalizeModel(pId, provider.name, raw));
+            }
+        }
+        return entries;
+    }
+    /**
+     * Dynamically resolves a model reference string (e.g. 'openai/gpt-4o', 'claude-3-5-sonnet', 'gpt-4o')
+     * into a matched provider ID, model ID, and catalog entry.
+     *
+     * Besides exact ids, an undated alias resolves to the newest dated model that extends it
+     * (`claude-3-5-sonnet` -> `claude-3-5-sonnet-20241022`).
+     */
+    async resolveModel(modelRef, defaultProvider) {
+        const catalog = await this.load();
+        // 1. Explicit syntax: "providerId/modelId"
+        if (modelRef.includes('/')) {
+            const [pId, ...rest] = modelRef.split('/');
+            const mId = rest.join('/');
+            const catalogId = resolveCatalogProviderId(pId);
+            const entry = await this.getModel(catalogId, mId);
+            return { providerId: catalogId, modelId: mId, entry };
+        }
+        const lookup = (providerId) => {
+            const provider = this.#provider(catalog, providerId);
+            if (!provider)
+                return undefined;
+            const models = provider.models ?? {};
+            if (Object.hasOwn(models, modelRef))
+                return { providerId, modelId: modelRef };
+            const alias = Object.keys(models)
+                .filter((id) => id.startsWith(`${modelRef}-`))
+                .sort()
+                .pop();
+            return alias ? { providerId, modelId: alias } : undefined;
+        };
+        const toResult = (hit) => {
+            const provider = this.#provider(catalog, hit.providerId);
+            return {
+                ...hit,
+                entry: this.#normalizeModel(hit.providerId, provider.name, provider.models[hit.modelId]),
+            };
+        };
+        // 2. Check default provider if specified
+        const defaultId = defaultProvider ? resolveCatalogProviderId(defaultProvider) : undefined;
+        if (defaultId) {
+            const hit = lookup(defaultId);
+            if (hit)
+                return toResult(hit);
+        }
+        // 3. Search catalog across all (non-ACP) providers: exact id first, then dated alias
+        const searchable = Object.keys(catalog).filter((id) => !id.startsWith('acp-'));
+        for (const pId of searchable) {
+            const provider = this.#provider(catalog, pId);
+            if (provider && Object.hasOwn(provider.models ?? {}, modelRef)) {
+                return toResult({ providerId: pId, modelId: modelRef });
+            }
+        }
+        for (const pId of searchable) {
+            const hit = lookup(pId);
+            if (hit)
+                return toResult(hit);
+        }
+        // 4. Fallback: return defaultProvider or 'openai' with modelRef
+        return { providerId: defaultId ?? 'openai', modelId: modelRef };
+    }
+    #provider(catalog, providerId) {
+        return Object.hasOwn(catalog, providerId) ? catalog[providerId] : undefined;
+    }
+    #isMemoryFresh(key) {
+        if (!this.#cache || this.#cacheKey !== key || this.#cacheAt === null)
+            return false;
+        const ttl = this.#cacheIsFallback ? FALLBACK_TTL_MS : this.#ttlMs;
+        return Date.now() - this.#cacheAt < ttl;
+    }
+    #store(key, catalog, isFallback) {
+        this.#cache = catalog;
+        this.#cacheKey = key;
+        this.#cacheAt = Date.now();
+        this.#cacheIsFallback = isFallback;
+    }
+    /**
+     * Fields models.dev does not provide are reported as "unknown" (`false` / `0`), never guessed.
+     */
+    #normalizeModel(providerId, providerName, raw) {
+        const pricing = raw.cost
+            ? {
+                input: raw.cost.input ?? 0,
+                output: raw.cost.output ?? 0,
+                cacheReadCostPer1M: raw.cost.cache_read,
+                cacheWriteCostPer1M: raw.cost.cache_write,
+                reasoningCostPer1M: raw.cost.reasoning,
+            }
+            : undefined;
+        return {
+            id: raw.id,
+            name: raw.name ?? raw.id,
+            providerId,
+            providerName,
+            contextLimit: raw.limit?.context ?? 0,
+            outputLimit: raw.limit?.output ?? 0,
+            toolCall: raw.tool_call ?? false,
+            structuredOutput: raw.structured_output ?? false,
+            pricing,
+            description: raw.description,
+            headers: raw.headers,
+            rawModel: raw,
+        };
+    }
+    async #getSource(options) {
+        const overridePath = options.overridePath ?? this.#customOverridePath ?? process.env.MODELS_DEV_PATH;
+        if (overridePath) {
+            const absolutePath = path.resolve(overridePath);
+            return {
+                key: `override:${absolutePath}`,
+                cachePath: absolutePath,
+                overridePath: absolutePath,
+            };
+        }
+        const cacheOverride = options.cachePath ?? this.#customCachePath ?? process.env.MODELS_DEV_CACHE_PATH;
+        if (cacheOverride) {
+            const absolutePath = path.resolve(cacheOverride);
+            return {
+                key: `cache:${absolutePath}`,
+                cachePath: absolutePath,
+            };
+        }
+        let defaultPath;
+        try {
+            const { default: app } = await import('@adonisjs/core/services/app');
+            defaultPath = app.makePath('storage', 'models', 'models.dev.json');
+        }
+        catch {
+            defaultPath = path.resolve(process.cwd(), 'storage', 'models', 'models.dev.json');
+        }
+        return {
+            key: `default:${defaultPath}`,
+            cachePath: defaultPath,
+        };
+    }
+    #loadSource(source, options) {
+        const promise = this.#readSource(source, options).then(({ catalog, isFallback }) => {
+            this.#store(source.key, catalog, isFallback);
+            return catalog;
+        });
+        this.#inFlight = promise;
+        this.#inFlightKey = source.key;
+        return promise.finally(() => {
+            if (this.#inFlight === promise) {
+                this.#inFlight = null;
+                this.#inFlightKey = null;
+            }
+        });
+    }
+    async #readSource(source, options) {
+        if (source.overridePath) {
+            this.#logger?.info?.(`[ModelsDevSource] loading from override: ${source.overridePath}`);
+            try {
+                const data = sanitizeCatalog(JSON.parse(await readFile(source.overridePath, 'utf-8')));
+                if (data)
+                    return { catalog: this.#injectSystemProviders(data), isFallback: false };
+                this.#logger?.warn?.('[ModelsDevSource] override file has no valid providers');
+            }
+            catch (err) {
+                this.#logger?.warn?.(`[ModelsDevSource] failed to parse override file: ${err instanceof Error ? err.message : String(err)}`);
+            }
+        }
+        // 1. A fresh disk cache wins (unless a remote refresh is forced)
+        const local = await this.#readLocalCacheWithAge(source.cachePath);
+        if (local && !options.forceRemote && local.ageMs < this.#ttlMs) {
+            return { catalog: this.#injectSystemProviders(local.data), isFallback: false };
+        }
+        // 2. Otherwise (missing / expired / forced) ask models.dev
+        const remote = await this.#fetchRemote(source.cachePath);
+        if (remote) {
+            return { catalog: this.#injectSystemProviders(remote), isFallback: false };
+        }
+        // 3. Network failed: a stale cache is better than nothing
+        if (local) {
+            this.#logger?.warn?.(`[ModelsDevSource] refresh failed, using stale cache (${Math.round(local.ageMs / 3_600_000)}h old)`);
+            return { catalog: this.#injectSystemProviders(local.data), isFallback: false };
+        }
+        return { catalog: this.#injectSystemProviders(this.#getFallbackModels()), isFallback: true };
+    }
+    async #readLocalCache(cachePath) {
+        return (await this.#readLocalCacheWithAge(cachePath))?.data ?? null;
+    }
+    async #readLocalCacheWithAge(cachePath) {
+        try {
+            const [content, fileStat] = await Promise.all([readFile(cachePath, 'utf-8'), stat(cachePath)]);
+            const data = sanitizeCatalog(JSON.parse(content));
+            if (!data) {
+                this.#logger?.warn?.(`[ModelsDevSource] cache at ${cachePath} contains no valid providers`);
+                return null;
+            }
+            return { data, ageMs: Math.max(0, Date.now() - fileStat.mtimeMs) };
+        }
+        catch (err) {
+            if (err?.code !== 'ENOENT') {
+                const msg = err instanceof Error ? err.message : String(err);
+                this.#logger?.warn?.(`[ModelsDevSource] cache read error at ${cachePath}: ${msg}`);
+            }
+            return null;
+        }
+    }
+    /** Writes via a temp file + rename so concurrent readers never see a half-written file. */
+    async #writeAtomic(filePath, content) {
+        await mkdir(path.dirname(filePath), { recursive: true });
+        const tmpPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+        try {
+            await writeFile(tmpPath, content);
+            await rename(tmpPath, filePath);
+        }
+        catch (err) {
+            await rm(tmpPath, { force: true }).catch(() => { });
+            throw err;
+        }
+    }
+    async #fetchRemote(cachePath) {
+        this.#logger?.info?.('[ModelsDevSource] fetching catalog from models.dev...');
+        const etagPath = `${cachePath}.etag`;
+        let etag = null;
+        let lastModified = null;
+        try {
+            const meta = JSON.parse(await readFile(etagPath, 'utf-8'));
+            etag = typeof meta.etag === 'string' ? meta.etag : null;
+            lastModified = typeof meta.lastModified === 'string' ? meta.lastModified : null;
+        }
+        catch {
+            // no previous metadata
+        }
+        let lastError;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+                const headers = {};
+                if (etag)
+                    headers['If-None-Match'] = etag;
+                if (lastModified)
+                    headers['If-Modified-Since'] = lastModified;
+                const response = await fetch(MODELS_DEV_URL, {
+                    signal: AbortSignal.timeout(6_000),
+                    headers: Object.keys(headers).length ? headers : undefined,
+                });
+                if (response.status === 304) {
+                    this.#logger?.info?.('[ModelsDevSource] 304 Not Modified — using local cache');
+                    const cached = await this.#readLocalCache(cachePath);
+                    if (cached) {
+                        // Restart the TTL clock of the unchanged file
+                        const now = new Date();
+                        await utimes(cachePath, now, now).catch(() => { });
+                        return cached;
+                    }
+                    throw new Error('Received 304 but local cache file was missing');
+                }
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch models.dev: ${response.status} ${response.statusText}`);
+                }
+                const data = sanitizeCatalog(await response.json());
+                if (!data) {
+                    throw new Error('Invalid models.dev response: no valid providers');
+                }
+                await this.#writeAtomic(cachePath, JSON.stringify(data));
+                const newEtag = response.headers.get('etag');
+                const newLastMod = response.headers.get('last-modified');
+                if (newEtag || newLastMod) {
+                    await this.#writeAtomic(etagPath, JSON.stringify({ etag: newEtag, lastModified: newLastMod })).catch(() => { });
+                }
+                this.#logger?.info?.(`[ModelsDevSource] successfully updated catalog at ${cachePath}`);
+                return data;
+            }
+            catch (err) {
+                lastError = err instanceof Error ? err : new Error(String(err));
+                this.#logger?.warn?.(`[ModelsDevSource] fetch attempt ${attempt} failed: ${lastError.message}`);
+                if (attempt < 2) {
+                    await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+                }
+            }
+        }
+        this.#logger?.warn?.(`[ModelsDevSource] all network attempts failed. Error: ${lastError?.message}`);
+        return null;
+    }
+    #injectSystemProviders(catalog) {
+        const registry = { ...catalog };
+        const fallback = this.#getFallbackModels();
+        // Inject system fallback providers if missing
+        for (const id of ['openai', 'anthropic', 'google']) {
+            if (!Object.hasOwn(registry, id))
+                registry[id] = fallback[id];
+        }
+        // ACP agents are exposed under `acp-<id>` providers (never auto-selected as fallbacks)
+        for (const entry of getAllAcpProviderEntries()) {
+            if (entry && !Object.hasOwn(registry, entry.id)) {
+                registry[entry.id] = {
+                    id: entry.id,
+                    name: entry.name,
+                    env: entry.env,
+                    npm: entry.npm,
+                    protocol: entry.protocol,
+                    models: Object.fromEntries(Object.entries(entry.models).map(([modelId, model]) => [
+                        modelId,
+                        {
+                            ...model,
+                            tool_call: true,
+                            structured_output: true,
+                            limit: { context: 200_000, output: 8_192 },
+                        },
+                    ])),
+                };
+            }
+        }
+        return registry;
+    }
+    #getFallbackModels() {
+        if (this.#fallback)
+            return this.#fallback;
+        this.#fallback = {
+            'openai': {
+                id: 'openai',
+                name: 'OpenAI',
+                env: ['OPENAI_API_KEY'],
+                api: 'https://api.openai.com/v1',
+                protocol: 'openai',
+                npm: '@ai-sdk/openai',
+                models: {
+                    'gpt-4o': {
+                        id: 'gpt-4o',
+                        name: 'GPT-4o',
+                        tool_call: true,
+                        structured_output: true,
+                        limit: { context: 128_000, output: 16_384 },
+                        cost: costOf('gpt-4o'),
+                    },
+                    'gpt-4o-mini': {
+                        id: 'gpt-4o-mini',
+                        name: 'GPT-4o Mini',
+                        tool_call: true,
+                        structured_output: true,
+                        limit: { context: 128_000, output: 16_384 },
+                        cost: costOf('gpt-4o-mini'),
+                    },
+                    'gpt-4.1': {
+                        id: 'gpt-4.1',
+                        name: 'GPT-4.1',
+                        tool_call: true,
+                        structured_output: true,
+                        limit: { context: 1_047_576, output: 32_768 },
+                        cost: costOf('gpt-4.1'),
+                    },
+                    'o1': {
+                        id: 'o1',
+                        name: 'o1',
+                        tool_call: true,
+                        structured_output: true,
+                        reasoning: true,
+                        limit: { context: 200_000, output: 100_000 },
+                        cost: costOf('o1'),
+                    },
+                    'o3-mini': {
+                        id: 'o3-mini',
+                        name: 'o3-mini',
+                        tool_call: true,
+                        structured_output: true,
+                        reasoning: true,
+                        limit: { context: 200_000, output: 100_000 },
+                        cost: costOf('o3-mini'),
+                    },
+                },
+            },
+            'anthropic': {
+                id: 'anthropic',
+                name: 'Anthropic',
+                env: ['ANTHROPIC_API_KEY'],
+                api: 'https://api.anthropic.com/v1',
+                protocol: 'anthropic',
+                npm: '@ai-sdk/anthropic',
+                models: {
+                    'claude-3-7-sonnet-latest': {
+                        id: 'claude-3-7-sonnet-latest',
+                        name: 'Claude 3.7 Sonnet',
+                        tool_call: true,
+                        structured_output: true,
+                        reasoning: true,
+                        limit: { context: 200_000, output: 64_000 },
+                        cost: costOf('claude-3-7-sonnet'),
+                    },
+                    'claude-3-5-sonnet-20241022': {
+                        id: 'claude-3-5-sonnet-20241022',
+                        name: 'Claude 3.5 Sonnet',
+                        tool_call: true,
+                        structured_output: true,
+                        limit: { context: 200_000, output: 8_192 },
+                        cost: costOf('claude-3-5-sonnet'),
+                    },
+                    'claude-3-5-haiku-20241022': {
+                        id: 'claude-3-5-haiku-20241022',
+                        name: 'Claude 3.5 Haiku',
+                        tool_call: true,
+                        structured_output: true,
+                        limit: { context: 200_000, output: 8_192 },
+                        cost: costOf('claude-3-5-haiku'),
+                    },
+                },
+            },
+            'google': {
+                id: 'google',
+                name: 'Google',
+                env: ['GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY'],
+                api: 'https://generativelanguage.googleapis.com/v1beta',
+                protocol: 'google',
+                npm: '@ai-sdk/google',
+                models: {
+                    'gemini-2.5-flash': {
+                        id: 'gemini-2.5-flash',
+                        name: 'Gemini 2.5 Flash',
+                        tool_call: true,
+                        structured_output: true,
+                        reasoning: true,
+                        limit: { context: 1_048_576, output: 65_536 },
+                        cost: costOf('gemini-2.5-flash'),
+                    },
+                    'gemini-2.5-pro': {
+                        id: 'gemini-2.5-pro',
+                        name: 'Gemini 2.5 Pro',
+                        tool_call: true,
+                        structured_output: true,
+                        reasoning: true,
+                        limit: { context: 1_048_576, output: 65_536 },
+                        cost: costOf('gemini-2.5-pro'),
+                    },
+                    'gemini-2.0-flash': {
+                        id: 'gemini-2.0-flash',
+                        name: 'Gemini 2.0 Flash',
+                        tool_call: true,
+                        structured_output: true,
+                        limit: { context: 1_048_576, output: 8_192 },
+                        cost: costOf('gemini-2.0-flash'),
+                    },
+                    'gemini-1.5-pro': {
+                        id: 'gemini-1.5-pro',
+                        name: 'Gemini 1.5 Pro',
+                        tool_call: true,
+                        structured_output: true,
+                        limit: { context: 2_000_000, output: 8_192 },
+                        cost: costOf('gemini-1.5-pro'),
+                    },
+                },
+            },
+            'groq': {
+                id: 'groq',
+                name: 'Groq',
+                env: ['GROQ_API_KEY'],
+                api: 'https://api.groq.com/openai/v1',
+                protocol: 'openai',
+                npm: '@ai-sdk/groq',
+                models: {
+                    'llama-3.3-70b-versatile': {
+                        id: 'llama-3.3-70b-versatile',
+                        name: 'Llama 3.3 70B',
+                        tool_call: true,
+                        structured_output: true,
+                        limit: { context: 128_000, output: 32_768 },
+                        cost: costOf('llama-3.3-70b-versatile'),
+                    },
+                },
+            },
+            'ollama': {
+                id: 'ollama',
+                name: 'Ollama (Local)',
+                env: [],
+                api: 'http://localhost:11434/v1',
+                protocol: 'openai-compatible',
+                npm: '@ai-sdk/openai-compatible',
+                models: {
+                    'llama3.2': {
+                        id: 'llama3.2',
+                        name: 'Llama 3.2',
+                        tool_call: true,
+                        structured_output: true,
+                        limit: { context: 128_000, output: 8_192 },
+                    },
+                },
+            },
+        };
+        return this.#fallback;
+    }
+}
+export const modelsDevSource = new ModelsDevSource();
+//# sourceMappingURL=source.js.map
