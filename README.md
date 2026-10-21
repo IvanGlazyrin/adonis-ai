@@ -68,7 +68,7 @@ pnpm add adonis-ai-kit
 ```
 
 > Package name on npm is `adonis-ai-kit` (the `adonis-ai` name on npm is taken by another project).
-> The source repository is [github.com/IvanGlazyrin/adonis-ai](https://github.com/IvanGlazyrin/adonis-ai).
+> The source repository is [github.com/IvanGlazyrin/adonis-ai-kit](https://github.com/IvanGlazyrin/adonis-ai-kit).
 
 Add the provider to `adonisrc.ts`:
 
@@ -293,8 +293,8 @@ npm run test:regression
 ## Development & Release
 
 ```bash
-git clone https://github.com/IvanGlazyrin/adonis-ai.git
-cd adonis-ai
+git clone https://github.com/IvanGlazyrin/adonis-ai-kit.git
+cd adonis-ai-kit
 npm install
 npm run build
 npm run test:regression
@@ -304,9 +304,9 @@ Consume the local build from an AdonisJS app without publishing:
 
 ```bash
 # in the app
-npm install ../path/to/adonis-ai   # file: dependency
+npm install ../path/to/adonis-ai-kit   # file: dependency
 # or globally
-cd ../adonis-ai && npm link
+cd ../adonis-ai-kit && npm link
 cd ../my-app && npm link adonis-ai-kit
 ```
 

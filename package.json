@@ -84,12 +84,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/IvanGlazyrin/adonis-ai.git"
+    "url": "git+https://github.com/IvanGlazyrin/adonis-ai-kit.git"
   },
   "bugs": {
-    "url": "https://github.com/IvanGlazyrin/adonis-ai/issues"
+    "url": "https://github.com/IvanGlazyrin/adonis-ai-kit/issues"
   },
-  "homepage": "https://github.com/IvanGlazyrin/adonis-ai#readme",
+  "homepage": "https://github.com/IvanGlazyrin/adonis-ai-kit#readme",
   "peerDependencies": {
     "@adonisjs/core": "^7.0.0",
     "@ai-sdk/anthropic": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0",
