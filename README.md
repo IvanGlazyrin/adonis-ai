@@ -3,6 +3,7 @@
 > **Production-grade AI & Agentic workflow toolkit for AdonisJS 7**, powered by Vercel AI SDK v7, multi-provider cascading fallback, circuit breakers, tool security guardrails, token budget tracking, models.dev live catalog, and ACP (Agent Client Protocol) coding agents.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![npm](https://img.shields.io/npm/v/adonis-ai-kit.svg)](https://www.npmjs.com/package/adonis-ai-kit)
 [![AdonisJS](https://img.shields.io/badge/AdonisJS-7.x-5A45FF.svg)](https://adonisjs.com)
 [![TypeScript](https://img.shields.io/badge/TypeScript-ES2022%20%2F%20NodeNext-blue.svg)](https://www.typescriptlang.org)
 [![Vercel AI SDK](https://img.shields.io/badge/Vercel%20AI%20SDK-v7.x-black.svg)](https://sdk.vercel.ai)
@@ -61,10 +62,13 @@ flowchart TD
 ## Installation
 
 ```bash
-npm install adonis-ai
+npm install adonis-ai-kit
 # or
-pnpm add adonis-ai
+pnpm add adonis-ai-kit
 ```
+
+> Package name on npm is `adonis-ai-kit` (the `adonis-ai` name on npm is taken by another project).
+> The source repository is [github.com/IvanGlazyrin/adonis-ai](https://github.com/IvanGlazyrin/adonis-ai).
 
 Add the provider to `adonisrc.ts`:
 
@@ -72,7 +76,7 @@ Add the provider to `adonisrc.ts`:
 export default defineConfig({
   providers: [
     // ...
-    () => import('adonis-ai/providers/ai_provider')
+    () => import('adonis-ai-kit/providers/ai_provider')
   ]
 })
 ```
@@ -81,7 +85,7 @@ Configure your providers in `config/ai.ts`:
 
 ```ts
 import env from '#start/env'
-import { defineConfig } from 'adonis-ai'
+import { defineConfig } from 'adonis-ai-kit'
 
 export default defineConfig({
   default: 'openai',
@@ -116,7 +120,7 @@ export default defineConfig({
 Generate text with automatic token usage tracking and USD calculation:
 
 ```ts
-import ai from 'adonis-ai/services/main'
+import ai from 'adonis-ai-kit/services/main'
 
 const result = await ai.generateText({
   prompt: 'Explain vector indexing in 3 sentences',
@@ -135,7 +139,7 @@ If OpenAI returns `429 Rate Limit` or `503 Service Unavailable`, `adonis-ai` aut
 
 ```ts
 import { z } from 'zod'
-import ai from 'adonis-ai/services/main'
+import ai from 'adonis-ai-kit/services/main'
 
 const resumeSchema = z.object({
   fullName: z.string(),
@@ -159,7 +163,7 @@ Use the built-in `response.streamAI()` macro:
 
 ```ts
 import type { HttpContext } from '@adonisjs/core/http'
-import ai from 'adonis-ai/services/main'
+import ai from 'adonis-ai-kit/services/main'
 
 export default class ChatController {
   async stream({ request, response }: HttpContext) {
@@ -185,7 +189,7 @@ export default class ChatController {
 Prevent untrusted AI models from executing destructive operations:
 
 ```ts
-import { ToolRegistry, ConfirmationService, PolicyGuard } from 'adonis-ai/guard'
+import { ToolRegistry, ConfirmationService, PolicyGuard } from 'adonis-ai-kit/guard'
 import { tool } from 'ai'
 import { z } from 'zod'
 
@@ -212,7 +216,7 @@ registry.register(
 ### 5. Cost Tracking & Atomic Token Budget Enforcement
 
 ```ts
-import { CostTracker, BudgetEnforcer } from 'adonis-ai/budget'
+import { CostTracker, BudgetEnforcer } from 'adonis-ai-kit/budget'
 
 const tracker = new CostTracker({ maxRecords: 10_000 })
 const enforcer = new BudgetEnforcer({
@@ -242,7 +246,7 @@ try {
 Run subagents using local CLI tools like **Claude Code**, **opencode**, or custom ACP binaries with sanitized environments:
 
 ```ts
-import { AgentRunner, AgentLoader } from 'adonis-ai/agents'
+import { AgentRunner, AgentLoader } from 'adonis-ai-kit/agents'
 
 const loader = new AgentLoader({
   configsDir: './resources/agent-configs',
@@ -283,6 +287,37 @@ npm run test:regression
 - **Token Budget**: Rate calculations, cache-read discounts, reasoning token surcharges, ring-buffer bounded memory.
 - **Tool Guard**: Policy enforcement (`allow`, `ask`, `deny`), concurrency slots, fail-closed handlers, session validation.
 - **Adonis AI Core**: Cascading failovers without duplicate side-effects, SSE keepalive frames, models.dev live discovery & TTL, ACP command sanitization.
+
+---
+
+## Development & Release
+
+```bash
+git clone https://github.com/IvanGlazyrin/adonis-ai.git
+cd adonis-ai
+npm install
+npm run build
+npm run test:regression
+```
+
+Consume the local build from an AdonisJS app without publishing:
+
+```bash
+# in the app
+npm install ../path/to/adonis-ai   # file: dependency
+# or globally
+cd ../adonis-ai && npm link
+cd ../my-app && npm link adonis-ai-kit
+```
+
+Releases are published to npm by pushing a version tag:
+
+```bash
+npm version patch            # bumps package.json + tag v1.1.1
+git push --follow-tags       # .github/workflows/release.yml runs npm publish
+```
+
+The workflow requires an `NPM_TOKEN` secret in the repository settings.
 
 ---
 

@@ -31,8 +31,8 @@ export default class MakeAiAgentCommand extends BaseCommand {
             this.ui.logger.error(`Agent file already exists: ${targetFile}`);
             return;
         }
-        const template = `import ai from '@agent-kit/adonis-ai/services/main'
-import type { GenerateTextResult, StreamTextResult } from '@agent-kit/adonis-ai/types'
+        const template = `import ai from 'adonis-ai-kit/services/main'
+import type { GenerateTextResult, StreamTextResult } from 'adonis-ai-kit/types'
 
 export interface ${className}Input {
   prompt: string
