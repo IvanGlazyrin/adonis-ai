@@ -1,4 +1,10 @@
 import { PolicyViolationError } from './errors.js';
+/** A tool description may be a function (AI SDK v7); fall back to the tool name then. */
+function describeTool(tool, fallback) {
+    return typeof tool.description === 'string' && tool.description.length > 0
+        ? tool.description
+        : fallback;
+}
 /**
  * Registry for managing AI agent tools, access permissions, policy guards,
  * and Human-in-the-loop confirmation hooks.
@@ -102,7 +108,7 @@ export class ToolRegistry {
                         const confirmation = await options.confirmation.waitForResponse({
                             sessionId: options.sessionId,
                             toolName: name,
-                            action: tool.description || name,
+                            action: describeTool(tool, name),
                             params: args ?? {},
                         }, options.timeoutMs, execOptions?.abortSignal);
                         if (confirmation.status !== 'approved') {

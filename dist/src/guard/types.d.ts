@@ -10,7 +10,11 @@ export type ToolPermission = 'allow' | 'ask' | 'deny';
  * Extra keys (`outputSchema`, `providerOptions`, ...) are preserved when a tool is wrapped.
  */
 export interface ToolDefinition<TArgs = any, TResult = any> {
-    description?: string;
+    /**
+     * Tool description. AI SDK v7 also allows a function that builds the description
+     * from the call context, so both shapes are accepted.
+     */
+    description?: string | ((options: any) => string);
     inputSchema?: unknown;
     /** @deprecated AI SDK v4 name of `inputSchema`. */
     parameters?: unknown;
