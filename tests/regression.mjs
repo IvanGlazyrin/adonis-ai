@@ -11,7 +11,7 @@ const { AiManager } = await import(`${P}/ai_manager.js`)
 const { AgentRunner } = await import(`${P}/agents/agent_runner.js`)
 const { CircuitBreaker } = await import(`${P}/circuit_breaker.js`)
 const { defineConfig } = await import(`${P}/define_config.js`)
-const { classifyError } = await import(`${P}/error_classifier.js`)
+const { classifyError, classifyErrorClass, isRetryableError, getUserFriendlyMessage } = await import(`${P}/error_classifier.js`)
 const acp = await import(`${P}/acp/provider.js`)
 const acpAgents = await import(`${P}/acp/acp_agents.js`)
 
@@ -384,6 +384,43 @@ await t('classifier', () => {
   assert.equal(k(Object.assign(new Error('x'), { name: 'AbortError' })), 'fatal')
   assert.equal(k(Object.assign(new Error('x'), { name: 'AI_TypeValidationError' })), 'fatal')
   assert.equal(k(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } })), 'retryable')
+})
+await t('error taxonomy: status codes map to fine-grained classes', () => {
+  const c = (e) => classifyErrorClass(e)
+  assert.equal(c(apiError(429)), 'rate_limit')
+  assert.equal(c(apiError(529)), 'overloaded')
+  assert.equal(c(apiError(408)), 'timeout')
+  assert.equal(c(apiError(401)), 'auth_error')
+  assert.equal(c(apiError(403)), 'auth_error')
+  assert.equal(c(apiError(404)), 'model_not_found')
+  assert.equal(c(apiError(500)), 'server_error')
+  assert.equal(c(apiError(503)), 'server_error')
+  assert.equal(c({ statusCode: 400 }), 'invalid_request')
+  assert.equal(c(Object.assign(new Error('context length exceeded'), { statusCode: 400 })), 'prompt_too_long')
+  assert.equal(c(Object.assign(new Error('max_tokens exceeded'), { statusCode: 400 })), 'prompt_too_long')
+})
+await t('error taxonomy: network/timeout/no-output detection', () => {
+  const c = (e) => classifyErrorClass(e)
+  assert.equal(c(new Error('fetch failed')), 'network_error')
+  assert.equal(c(new Error('ECONNREFUSED')), 'network_error')
+  assert.equal(c(new Error('ENOTFOUND')), 'network_error')
+  assert.equal(c(new Error('ETIMEDOUT')), 'timeout')
+  assert.equal(c(new Error('timeout waiting')), 'timeout')
+  assert.equal(c(new Error('something weird')), 'unknown')
+  assert.equal(c(null), 'unknown')
+  assert.equal(c('string error'), 'unknown')
+  assert.equal(c(Object.assign(new Error('no output'), { name: 'AI_NoOutputGeneratedError' })), 'no_output_generated')
+})
+await t('error taxonomy: retryable set and user-facing messages', () => {
+  for (const cls of ['rate_limit', 'overloaded', 'timeout', 'server_error', 'network_error', 'prompt_too_long', 'no_output_generated']) {
+    assert.equal(isRetryableError(cls), true, `${cls} should be retryable`)
+  }
+  for (const cls of ['auth_error', 'model_not_found', 'invalid_request', 'unknown']) {
+    assert.equal(isRetryableError(cls), false, `${cls} should not be retryable`)
+  }
+  for (const cls of ['rate_limit', 'overloaded', 'timeout', 'auth_error', 'model_not_found', 'prompt_too_long', 'invalid_request', 'server_error', 'network_error', 'unknown']) {
+    assert.ok(getUserFriendlyMessage(cls).length > 0)
+  }
 })
 await t('acp: arbitrary model string is never executed as a command', async () => {
   const d = new acp.AcpDriver('cli', { driver: 'acp' })

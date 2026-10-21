@@ -1,5 +1,6 @@
 export * from './types.js';
 export * from './errors.js';
+export * from './error_classifier.js';
 export * from './circuit_breaker.js';
 export * from './define_config.js';
 export * from './ai_manager.js';
