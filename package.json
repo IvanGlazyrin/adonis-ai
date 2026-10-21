@@ -92,21 +92,24 @@
   "homepage": "https://github.com/IvanGlazyrin/adonis-ai#readme",
   "peerDependencies": {
     "@adonisjs/core": "^7.0.0",
-    "@ai-sdk/anthropic": "^1.0.0 || ^2.0.0",
-    "@ai-sdk/google": "^1.0.0 || ^2.0.0",
-    "@ai-sdk/groq": "^1.0.0 || ^2.0.0",
-    "@ai-sdk/openai": "^1.0.0 || ^2.0.0",
-    "@ai-sdk/openai-compatible": "^1.0.0 || ^2.0.0",
-    "@mcpc-tech/acp-ai-provider": ">=0.1.0"
+    "@ai-sdk/anthropic": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0",
+    "@ai-sdk/google": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0",
+    "@ai-sdk/groq": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0",
+    "@ai-sdk/openai": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0",
+    "@ai-sdk/openai-compatible": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0",
+    "@mcpc-tech/acp-ai-provider": ">=0.1.0",
+    "ai": "^7.0.0"
   },
   "dependencies": {
-    "ai": "^7.0.0",
     "yaml": "^2.7.0",
     "zod": "^3.25.76 || ^4.1.8"
   },
   "devDependencies": {
     "@adonisjs/core": "^7.4.0",
+    "@ai-sdk/anthropic": "^4.0.0",
+    "@ai-sdk/openai": "^4.0.0",
     "@types/node": "^22.0.0",
+    "ai": "^7.0.0",
     "typescript": "^5.0.0 || ^6.0.0"
   },
   "engines": {
