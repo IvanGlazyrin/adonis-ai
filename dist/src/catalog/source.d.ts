@@ -23,6 +23,15 @@ export declare class ModelsDevSource {
         cachePath?: string;
         overridePath?: string;
         ttlMs?: number;
+        /**
+         * Inject the built-in system providers (openai / anthropic / google) and the
+         * ACP agents into the catalog when they are missing.
+         *
+         * Default: `true`. Set it to `false` when the catalog must stay exactly as
+         * models.dev (or as the override file) returned it — for example when the
+         * application injects its own system providers.
+         */
+        injectSystemProviders?: boolean;
     });
     setLogger(logger: LoggerContract): void;
     load(options?: ModelsDevLoadOptions): Promise<ModelsDevCatalog>;

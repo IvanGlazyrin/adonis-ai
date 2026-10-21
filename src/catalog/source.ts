@@ -109,16 +109,27 @@ export class ModelsDevSource {
   #customOverridePath?: string
   #ttlMs: number
   #fallback: ModelsDevCatalog | null = null
+  #injectSystemProvidersEnabled: boolean
 
   constructor(options?: {
     logger?: LoggerContract
     cachePath?: string
     overridePath?: string
     ttlMs?: number
+    /**
+     * Inject the built-in system providers (openai / anthropic / google) and the
+     * ACP agents into the catalog when they are missing.
+     *
+     * Default: `true`. Set it to `false` when the catalog must stay exactly as
+     * models.dev (or as the override file) returned it — for example when the
+     * application injects its own system providers.
+     */
+    injectSystemProviders?: boolean
   }) {
     this.#logger = options?.logger
     this.#customCachePath = options?.cachePath
     this.#customOverridePath = options?.overridePath
+    this.#injectSystemProvidersEnabled = options?.injectSystemProviders ?? true
     this.#ttlMs =
       typeof options?.ttlMs === 'number' && options.ttlMs > 0 ? options.ttlMs : DEFAULT_TTL_MS
   }
@@ -570,6 +581,7 @@ export class ModelsDevSource {
   }
 
   #injectSystemProviders(catalog: ModelsDevCatalog): ModelsDevCatalog {
+    if (!this.#injectSystemProvidersEnabled) return catalog
     const registry: ModelsDevCatalog = { ...catalog }
     const fallback = this.#getFallbackModels()
 

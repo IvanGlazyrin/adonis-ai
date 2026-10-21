@@ -76,10 +76,12 @@ export class ModelsDevSource {
     #customOverridePath;
     #ttlMs;
     #fallback = null;
+    #injectSystemProvidersEnabled;
     constructor(options) {
         this.#logger = options?.logger;
         this.#customCachePath = options?.cachePath;
         this.#customOverridePath = options?.overridePath;
+        this.#injectSystemProvidersEnabled = options?.injectSystemProviders ?? true;
         this.#ttlMs =
             typeof options?.ttlMs === 'number' && options.ttlMs > 0 ? options.ttlMs : DEFAULT_TTL_MS;
     }
@@ -460,6 +462,8 @@ export class ModelsDevSource {
         return null;
     }
     #injectSystemProviders(catalog) {
+        if (!this.#injectSystemProvidersEnabled)
+            return catalog;
         const registry = { ...catalog };
         const fallback = this.#getFallbackModels();
         // Inject system fallback providers if missing
