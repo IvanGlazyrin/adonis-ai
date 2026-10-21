@@ -1,15 +1,25 @@
 import type { LoggerContract } from '../ai_manager.js';
 import type { AcpAgentConfig, AcpAgentRuntimeConfig, AcpMcpServerConfig, AcpProjectMcpConfig } from './types.js';
 /**
- * Built-in ACP agent configurations. These are the ONLY commands that may be started from a
- * model name; anything else must be configured explicitly via `AcpProviderConfig.command`.
+ * Registry of the ACP agents this application may start.
  *
- * Commands follow the agents' own ACP docs: Claude via the `claude-agent-acp` adapter, Gemini CLI
- * with `--acp`, Qwen Code's `qwen --acp`, Codex via `codex-acp`, `opencode acp`.
- * `sourcecraft` and `freebuff` could not be verified against upstream docs; override them with
- * `ACP_<AGENT>_PATH` / `ACP_<AGENT>_ARGS` if your install differs.
+ * It starts with the built-in agents, and an application can replace it with the
+ * binaries that are actually installed on the operator's machine
+ * (`setAcpAgents`) or extend it (`registerAcpAgent`).
  */
 export declare const ACP_AGENTS: Record<string, AcpAgentConfig>;
+/**
+ * Registers (or replaces) one ACP agent.
+ */
+export declare function registerAcpAgent(agentId: string, config: AcpAgentConfig): void;
+/**
+ * Replaces the whole agent registry, e.g. with the binaries of a given deployment.
+ */
+export declare function setAcpAgents(agents: Record<string, AcpAgentConfig>): void;
+/**
+ * Restores the built-in agent registry.
+ */
+export declare function resetAcpAgents(): void;
 /**
  * Get ACP agent configuration by ID.
  */

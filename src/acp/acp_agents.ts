@@ -18,7 +18,7 @@ import type {
  * `sourcecraft` and `freebuff` could not be verified against upstream docs; override them with
  * `ACP_<AGENT>_PATH` / `ACP_<AGENT>_ARGS` if your install differs.
  */
-export const ACP_AGENTS: Record<string, AcpAgentConfig> = Object.freeze({
+const DEFAULT_ACP_AGENTS: Record<string, AcpAgentConfig> = Object.freeze({
   'claude-code': {
     id: 'claude-code',
     name: 'Claude Code',
@@ -84,6 +84,37 @@ export const ACP_AGENTS: Record<string, AcpAgentConfig> = Object.freeze({
     supportsMcpServers: true,
   },
 })
+
+/**
+ * Registry of the ACP agents this application may start.
+ *
+ * It starts with the built-in agents, and an application can replace it with the
+ * binaries that are actually installed on the operator's machine
+ * (`setAcpAgents`) or extend it (`registerAcpAgent`).
+ */
+export const ACP_AGENTS: Record<string, AcpAgentConfig> = { ...DEFAULT_ACP_AGENTS }
+
+/**
+ * Registers (or replaces) one ACP agent.
+ */
+export function registerAcpAgent(agentId: string, config: AcpAgentConfig): void {
+  ACP_AGENTS[agentId] = config
+}
+
+/**
+ * Replaces the whole agent registry, e.g. with the binaries of a given deployment.
+ */
+export function setAcpAgents(agents: Record<string, AcpAgentConfig>): void {
+  for (const key of Object.keys(ACP_AGENTS)) delete ACP_AGENTS[key]
+  Object.assign(ACP_AGENTS, agents)
+}
+
+/**
+ * Restores the built-in agent registry.
+ */
+export function resetAcpAgents(): void {
+  setAcpAgents(DEFAULT_ACP_AGENTS)
+}
 
 /**
  * Get ACP agent configuration by ID.
