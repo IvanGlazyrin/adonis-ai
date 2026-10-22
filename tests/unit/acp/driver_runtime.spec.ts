@@ -1,6 +1,6 @@
 import { test } from '@japa/runner'
 import path from 'node:path'
-import { AcpDriver } from '../../../src/acp/provider.js'
+import { AcpDriver, buildAgentEnv } from '../../../src/acp/provider.js'
 import type { AcpAgentRuntimeConfig } from '../../../src/acp/types.js'
 
 test.group('AcpDriver prebuilt runtime', () => {
@@ -35,5 +35,18 @@ test.group('AcpDriver prebuilt runtime', () => {
       runtime: { command: 'c', args: [], cwd: 'relative', env: {}, mcpServers: [] },
     })
     assert.throws(() => (driver as any).resolveRuntimeConfig('claude-code'), /absolute/)
+  })
+
+  test('blanks process.env keys that are missing from a custom env source', ({ assert }) => {
+    const key = 'ADONIS_AI_TEST_ONLY_IN_PROCESS_ENV'
+    process.env[key] = 'leak'
+    try {
+      const env = buildAgentEnv({ PATH: '/bin' }, { TOKEN: 't' })
+      assert.equal(env[key], '')
+      assert.equal(env.PATH, '/bin')
+      assert.equal(env.TOKEN, 't')
+    } finally {
+      delete process.env[key]
+    }
   })
 })

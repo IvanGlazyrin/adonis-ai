@@ -90,7 +90,9 @@ export function buildAgentEnv(
   if (inheritEnv) return { ...extra }
 
   const env: Record<string, string> = {}
-  for (const key of Object.keys(source)) {
+  // The provider merges over `process.env`, so keys that only exist there must be blanked too.
+  const keys = new Set([...Object.keys(source), ...Object.keys(process.env)])
+  for (const key of keys) {
     const upper = key.toUpperCase()
     const safe = SAFE_ENV_KEYS.has(upper) || SAFE_ENV_PREFIXES.some((p) => upper.startsWith(p))
     env[key] = safe ? (source[key] ?? '') : ''
@@ -102,7 +104,11 @@ export interface AcpDriverDeps {
   logger?: Logger
   /** Answers agent permission requests when `permissionPolicy` is `ask`. */
   confirmation?: ConfirmationService
-  /** Environment to derive the agent environment from. Default: `process.env` */
+  /**
+   * Environment whose allowlisted variables the agent keeps. Default: `process.env`. Variables that
+   * exist only in `process.env` are blanked as well, because the agent is spawned with
+   * `{ ...process.env, ...env }`.
+   */
   env?: Record<string, string | undefined>
   /**
    * Prebuilt runtime config (e.g. from `buildAcpRuntimeConfig`). Used verbatim, except that `cwd`

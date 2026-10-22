@@ -1,4 +1,6 @@
 import { test } from '@japa/runner'
+import { AcpDriver } from '../../../src/acp/provider.js'
+import { ConfirmationService } from '../../../src/guard/confirmation.js'
 import { LanguageModelFactory } from '../../../src/models/language_model_factory.js'
 import { ProviderFactoryRegistry } from '../../../src/models/provider_factories.js'
 
@@ -76,5 +78,70 @@ test.group('LanguageModelFactory', () => {
 
   test('shutdown without ACP models is a no-op', async () => {
     await new LanguageModelFactory().shutdown()
+  })
+})
+
+const acpModel = (cwd: string) => ({
+  providerID: 'acp-x',
+  modelID: 'x',
+  npm: '@mcpc-tech/acp-ai-provider',
+  acpConfig: { command: 'agent', args: [], cwd, env: {}, mcpServers: [] },
+})
+
+/** Stubs `AcpDriver.getModel` (no agent process) and records every driver that served a call. */
+async function withStubbedAcp(run: (served: AcpDriver[]) => Promise<void>) {
+  const original = AcpDriver.prototype.getModel
+  const served: AcpDriver[] = []
+  AcpDriver.prototype.getModel = async function (this: AcpDriver) {
+    served.push(this)
+    return {} as any
+  }
+  try {
+    await run(served)
+  } finally {
+    AcpDriver.prototype.getModel = original
+  }
+}
+
+test.group('LanguageModelFactory ACP options', () => {
+  test('shares one driver per command and cwd by default and stops it on shutdown', async ({ assert }) => {
+    await withStubbedAcp(async (served) => {
+      const factory = new LanguageModelFactory()
+      await factory.create(acpModel(process.cwd()) as any)
+      await factory.create(acpModel(process.cwd()) as any)
+      assert.strictEqual(served[0], served[1])
+      assert.equal((served[0] as any).config.inheritEnv, false)
+    })
+  })
+
+  test('shareDriver: false creates a driver per call and shutdown stops them all', async ({ assert }) => {
+    await withStubbedAcp(async (served) => {
+      const factory = new LanguageModelFactory({ acp: { shareDriver: false, inheritEnv: true } })
+      await factory.create(acpModel(process.cwd()) as any)
+      await factory.create(acpModel(process.cwd()) as any)
+      assert.notStrictEqual(served[0], served[1])
+      assert.isTrue((served[0] as any).config.inheritEnv)
+
+      const stopped: AcpDriver[] = []
+      const originalShutdown = AcpDriver.prototype.shutdown
+      AcpDriver.prototype.shutdown = async function (this: AcpDriver) {
+        stopped.push(this)
+      }
+      try {
+        await factory.shutdown()
+      } finally {
+        AcpDriver.prototype.shutdown = originalShutdown
+      }
+      assert.sameMembers(stopped, served)
+    })
+  })
+
+  test('passes the confirmation service to the driver', async ({ assert }) => {
+    await withStubbedAcp(async (served) => {
+      const confirmation = new ConfirmationService()
+      await new LanguageModelFactory({ acp: { confirmation } }).create(acpModel(process.cwd()) as any)
+      assert.strictEqual((served[0] as any).confirmation, confirmation)
+      confirmation.dispose()
+    })
   })
 })

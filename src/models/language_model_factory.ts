@@ -12,7 +12,14 @@ export interface LanguageModelFactoryOptions {
   /** Per-request fetch timeout. Default: 180_000 */
   timeoutMs?: number
   logger?: Logger
-  acp?: { permissionPolicy?: AcpPermissionPolicy; confirmation?: ConfirmationService }
+  acp?: {
+    permissionPolicy?: AcpPermissionPolicy
+    confirmation?: ConfirmationService
+    /** Pass the full server environment to agent processes. Default: false (allowlisted variables only). */
+    inheritEnv?: boolean
+    /** Reuse one driver (and agent process) per command and cwd. Default: true. */
+    shareDriver?: boolean
+  }
 }
 
 const ACP_NPM = '@mcpc-tech/acp-ai-provider'
@@ -40,6 +47,8 @@ export class LanguageModelFactory {
   private readonly logger?: Logger
   private readonly acp: LanguageModelFactoryOptions['acp']
   private readonly drivers = new Map<string, AcpDriver>()
+  /** Drivers created with `shareDriver: false`; tracked so `shutdown()` can stop them. */
+  private readonly unsharedDrivers = new Set<AcpDriver>()
 
   constructor(options: LanguageModelFactoryOptions = {}) {
     this.factories = options.factories ?? new ProviderFactoryRegistry()
@@ -71,8 +80,9 @@ export class LanguageModelFactory {
 
   /** Stops every ACP agent process started by this factory. */
   async shutdown(): Promise<void> {
-    const drivers = [...this.drivers.values()]
+    const drivers = [...this.drivers.values(), ...this.unsharedDrivers]
     this.drivers.clear()
+    this.unsharedDrivers.clear()
     await Promise.all(drivers.map((driver) => driver.shutdown()))
   }
 
@@ -90,7 +100,8 @@ export class LanguageModelFactory {
     this.logger?.info(`[LLM Provider] ACP command: ${runtime.command} (cwd: ${runtime.cwd})`)
 
     const key = `${runtime.command}::${runtime.cwd}`
-    let driver = this.drivers.get(key)
+    const shared = this.acp?.shareDriver !== false
+    let driver = shared ? this.drivers.get(key) : undefined
     if (!driver) {
       driver = new AcpDriver(
         model.providerID,
@@ -98,10 +109,12 @@ export class LanguageModelFactory {
           driver: 'acp',
           agentId,
           permissionPolicy: this.acp?.permissionPolicy ?? 'ask',
+          inheritEnv: this.acp?.inheritEnv ?? false,
         },
         { logger: this.logger, confirmation: this.acp?.confirmation, runtime }
       )
-      this.drivers.set(key, driver)
+      if (shared) this.drivers.set(key, driver)
+      else this.unsharedDrivers.add(driver)
     }
     return driver.getModel(agentId)
   }
