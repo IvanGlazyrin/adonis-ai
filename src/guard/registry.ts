@@ -14,6 +14,12 @@ export interface ToolAccessOptions {
   timeoutMs?: number
   /** Agent whose permission matrix applies in `getToolsByList()`. */
   agentName?: string
+  /**
+   * Per-call permission map. When given, it is the only source of permissions for this call:
+   * tools missing from it get the registry's `defaultPermission`. The agent matrix is neither
+   * read nor modified, so nothing leaks into later calls.
+   */
+  permissions?: Record<string, ToolPermission>
 }
 
 export interface WrapToolOptions extends ToolAccessOptions {
@@ -255,7 +261,11 @@ export class ToolRegistry {
     tool: ToolDefinition,
     options: ToolAccessOptions
   ): ToolDefinition | null {
-    const permission = this.getAgentPermission(agentName, name)
+    const permission = options.permissions
+      ? Object.hasOwn(options.permissions, name)
+        ? options.permissions[name]
+        : this.defaultPermission
+      : this.getAgentPermission(agentName, name)
     if (permission === 'deny') {
       return null
     }
