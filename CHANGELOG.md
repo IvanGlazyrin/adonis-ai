@@ -27,6 +27,9 @@ Includes the work previously staged as the 1.3.0 and 1.4.0 candidates, which wer
 - `CircuitBreaker.acquire()` returning a `BreakerPermit`, and `CircuitBreaker.resetAll()`.
 - `ToolAccessOptions.permissions` for per-call tool permissions.
 - ACP: `AcpAgentConfig.credentialEnv` and `buildAcpRuntimeConfig(agentId, options)` with `projectMcpPath` (the positional form keeps working).
+- Error taxonomy exported from the package root: `ErrorClass` (11 classes), `classifyErrorClass()`, `isRetryableError()` and `getUserFriendlyMessage()`.
+- Replaceable ACP agent registry: `registerAcpAgent()`, `setAcpAgents()` and `resetAcpAgents()`, so an application can point an agent at the binary installed on the machine.
+- Catalog option `injectSystemProviders` (default `true`) to turn off the automatic injection of openai/anthropic/google; superseded within this release by `systemProviders` and kept as a deprecated alias.
 - Catalog: `systemProviders: { fallback, acp }` option (also available as `CatalogConfig.systemProviders`) to inject fallback and ACP providers independently.
 
 ### Changed
@@ -40,16 +43,17 @@ Includes the work previously staged as the 1.3.0 and 1.4.0 candidates, which wer
 
 ### Deprecated
 
-- `injectSystemProviders` — use `systemProviders`.
+- `injectSystemProviders` (added earlier in this release, then superseded by `systemProviders`) — use `systemProviders`.
 - The `sourcecraft` and `freebuff` default ACP agents — they will be removed from the defaults in 2.0; register them with `registerAcpAgent()`.
 - `LoggerContract` — use `Logger`.
 
 ### Fixed
 
+- `ToolDefinition.description` accepts the AI SDK v7 tool description type (string or function); the confirmation action falls back to the tool name.
 - One error taxonomy now drives both fallback and circuit-breaker decisions.
 - HTTP status codes are found in `status`, `response.status`, nested `cause` and `lastError` (AI SDK `RetryError`).
 - HTTP 409 and 425 are classified as `overloaded`.
-- ACP agents registered with `setAcpAgents()`/`registerAcpAgent()` without `credentialEnv` inherit the built-in agent's credentials for the same id (keeps 1.1 behavior); `credentialEnv: []` opts out.
+- ACP agents registered with `setAcpAgents()`/`registerAcpAgent()` without `credentialEnv` inherit the built-in agent's credentials for the same id; `credentialEnv: []` opts out.
 - `CircuitBreaker.execute()` frees its probe slot even if `isFailure` throws.
 - Model chains fall through to the next candidate on missing provider packages, config errors and open breakers (without counting against the breaker), and reject a missing resolver up front.
 - Rejections of an async `onFallback` handler are caught and logged.
