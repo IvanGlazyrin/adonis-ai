@@ -11,6 +11,7 @@ export * from './acp/index.js'
 export * from './agents/index.js'
 export * from './guard/index.js'
 export * from './budget/index.js'
+export * from './models/index.js'
 
 // Explicitly resolve re-export ambiguities from star exports
 export type { ToolPermission } from './guard/index.js'

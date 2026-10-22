@@ -68,6 +68,10 @@
     "./agents": {
       "types": "./dist/src/agents/index.d.ts",
       "import": "./dist/src/agents/index.js"
+    },
+    "./models": {
+      "types": "./dist/src/models/index.d.ts",
+      "import": "./dist/src/models/index.js"
     }
   },
   "files": [
@@ -93,12 +97,26 @@
   "homepage": "https://github.com/IvanGlazyrin/adonis-ai-kit#readme",
   "peerDependencies": {
     "@adonisjs/core": "^7.0.0",
+    "@ai-sdk/amazon-bedrock": "^5",
     "@ai-sdk/anthropic": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0",
+    "@ai-sdk/azure": "^4",
+    "@ai-sdk/cerebras": "^3",
+    "@ai-sdk/cohere": "^4",
+    "@ai-sdk/deepinfra": "^3",
+    "@ai-sdk/gateway": "^4",
     "@ai-sdk/google": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0",
+    "@ai-sdk/google-vertex": "^5",
     "@ai-sdk/groq": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0",
+    "@ai-sdk/mistral": "^4",
     "@ai-sdk/openai": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0",
     "@ai-sdk/openai-compatible": "^1.0.0 || ^2.0.0 || ^3.0.0 || ^4.0.0",
+    "@ai-sdk/perplexity": "^5",
+    "@ai-sdk/togetherai": "^3",
+    "@ai-sdk/vercel": "^3",
+    "@ai-sdk/xai": "^5",
+    "@gitlab/gitlab-ai-provider": "^4",
     "@mcpc-tech/acp-ai-provider": ">=0.1.0",
+    "@openrouter/ai-sdk-provider": "^3",
     "ai": "^7.0.0"
   },
   "dependencies": {
@@ -126,13 +144,37 @@
     "access": "public"
   },
   "peerDependenciesMeta": {
+    "@ai-sdk/amazon-bedrock": {
+      "optional": true
+    },
     "@ai-sdk/anthropic": {
+      "optional": true
+    },
+    "@ai-sdk/azure": {
+      "optional": true
+    },
+    "@ai-sdk/cerebras": {
+      "optional": true
+    },
+    "@ai-sdk/cohere": {
+      "optional": true
+    },
+    "@ai-sdk/deepinfra": {
+      "optional": true
+    },
+    "@ai-sdk/gateway": {
       "optional": true
     },
     "@ai-sdk/google": {
       "optional": true
     },
+    "@ai-sdk/google-vertex": {
+      "optional": true
+    },
     "@ai-sdk/groq": {
+      "optional": true
+    },
+    "@ai-sdk/mistral": {
       "optional": true
     },
     "@ai-sdk/openai": {
@@ -141,7 +183,25 @@
     "@ai-sdk/openai-compatible": {
       "optional": true
     },
+    "@ai-sdk/perplexity": {
+      "optional": true
+    },
+    "@ai-sdk/togetherai": {
+      "optional": true
+    },
+    "@ai-sdk/vercel": {
+      "optional": true
+    },
+    "@ai-sdk/xai": {
+      "optional": true
+    },
+    "@gitlab/gitlab-ai-provider": {
+      "optional": true
+    },
     "@mcpc-tech/acp-ai-provider": {
+      "optional": true
+    },
+    "@openrouter/ai-sdk-provider": {
       "optional": true
     }
   }
