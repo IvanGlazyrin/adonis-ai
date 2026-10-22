@@ -209,7 +209,7 @@ export interface ModelChainCallOptions {
    * is not used: each entry is tried in order with its own per-credential circuit breaker.
    */
   models?: Array<ResolvedModel | string>
-  /** Called when a model failed with a retryable error and the next entry is about to be tried. */
+  /** Called when a model failed with a retryable error, or could not be attempted (missing provider package, config error, open breaker), and the next entry is about to be tried. */
   onFallback?: (event: FallbackEvent) => unknown
 }
 

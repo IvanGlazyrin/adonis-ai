@@ -84,8 +84,9 @@ export interface ModelChainOptions {
 
 /**
  * Runs `attempt` against each candidate in order until one succeeds. Each candidate is guarded by a
- * per-credential circuit breaker; a retryable failure moves on to the next candidate, anything else
- * (and any failure after tools ran) is thrown. An exhausted chain rethrows the last error.
+ * per-credential circuit breaker; a retryable failure, or a candidate that cannot be attempted (missing provider
+ * package, config error, open breaker), moves on to the next candidate; anything else, any failure after tools ran
+ * and any caller abort is thrown. An exhausted chain rethrows the last error.
  */
 export async function runModelChain<T>(
   candidates: ChainCandidate[],

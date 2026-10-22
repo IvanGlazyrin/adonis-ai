@@ -325,8 +325,9 @@ result.model    // its modelID
 // fromModel / toModel are breaker keys: the credential key when the model has one, otherwise provider/model
 ```
 
-- Entries are tried in order. Only retryable failures (429, 5xx, network) move on to the next entry; bad requests,
-  aborts and any failure after a tool has run are thrown as is. `streamText` falls back on errors before the first chunk.
+- Entries are tried in order. Retryable failures (429, 5xx, network) and entries that cannot be attempted (missing provider
+  package, config error, open breaker) move on to the next entry; bad requests, caller aborts and any failure after a
+  tool has run are thrown as is. `streamText` falls back on errors before the first chunk.
 - Each entry has its own circuit breaker, keyed by `credentialKey` when present (so one bad key doesn't block the others).
 - String entries are resolved through `config.resolver` (e.g. a `CatalogModelResolver`); without one a `ProviderConfigError` is thrown.
 - Models are built by `config.languageModels` (a `LanguageModelFactory`); when absent a default one is created lazily.
