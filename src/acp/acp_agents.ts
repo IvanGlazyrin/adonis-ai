@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import type { LoggerContract } from '../ai_manager.js'
+import type { Logger } from '../logger.js'
 import type {
   AcpAgentConfig,
   AcpAgentRuntimeConfig,
@@ -145,7 +145,7 @@ export function isAcpAgent(agentId: string): boolean {
 export function parseAcpArgs(
   argsOverride: string | undefined,
   fallback: string[],
-  logger?: LoggerContract
+  logger?: Logger
 ): string[] {
   if (!argsOverride) return fallback
   const trimmed = argsOverride.trim()
@@ -218,7 +218,7 @@ export function normalizeMcpServer(input: unknown): AcpMcpServerConfig | null {
 /** Builds the stdio MCP server entry for a project-local MCP server file. */
 export function buildProjectMcpServer(
   config: AcpProjectMcpConfig,
-  logger?: LoggerContract
+  logger?: Logger
 ): AcpMcpServerConfig | null {
   const serverPath = path.resolve(config.path)
   if (!existsSync(serverPath)) {
@@ -240,7 +240,7 @@ export function buildAcpRuntimeConfig(
   agentId: string,
   getEnv: (key: string) => string | undefined = (key) => process.env[key],
   envSource: Record<string, string | undefined> = process.env,
-  logger?: LoggerContract
+  logger?: Logger
 ): AcpAgentRuntimeConfig | null {
   const config = getAcpAgentConfig(agentId)
   if (!config) return null

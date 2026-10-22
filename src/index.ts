@@ -1,4 +1,5 @@
 export * from './types.js'
+export type { Logger } from './logger.js'
 export * from './errors.js'
 export * from './error_classifier.js'
 export * from './circuit_breaker.js'
@@ -12,4 +13,4 @@ export * from './guard/index.js'
 export * from './budget/index.js'
 
 // Explicitly resolve re-export ambiguities from star exports
-export type { ToolPermission, Logger } from './guard/index.js'
+export type { ToolPermission } from './guard/index.js'

@@ -2,7 +2,7 @@ import { mkdir, readFile, rename, rm, stat, utimes, writeFile } from 'node:fs/pr
 import path from 'node:path'
 import { DEFAULT_MODEL_PRICING } from '../budget/pricing.js'
 import type { ModelPricing } from '../budget/types.js'
-import type { LoggerContract } from '../ai_manager.js'
+import type { Logger } from '../logger.js'
 import { getAllAcpProviderEntries } from '../acp/acp_agents.js'
 import type {
   ModelCatalogEntry,
@@ -104,7 +104,7 @@ export class ModelsDevSource {
   #cacheIsFallback = false
   #inFlight: Promise<ModelsDevCatalog> | null = null
   #inFlightKey: string | null = null
-  #logger?: LoggerContract
+  #logger?: Logger
   #customCachePath?: string
   #customOverridePath?: string
   #ttlMs: number
@@ -112,7 +112,7 @@ export class ModelsDevSource {
   #injectSystemProvidersEnabled: boolean
 
   constructor(options?: {
-    logger?: LoggerContract
+    logger?: Logger
     cachePath?: string
     overridePath?: string
     ttlMs?: number
@@ -134,7 +134,7 @@ export class ModelsDevSource {
       typeof options?.ttlMs === 'number' && options.ttlMs > 0 ? options.ttlMs : DEFAULT_TTL_MS
   }
 
-  setLogger(logger: LoggerContract): void {
+  setLogger(logger: Logger): void {
     this.#logger = logger
   }
 

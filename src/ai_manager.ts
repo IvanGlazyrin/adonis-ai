@@ -31,12 +31,10 @@ import type {
   TokenUsage,
 } from './types.js'
 
-export interface LoggerContract {
-  info(message: string, ...args: unknown[]): void
-  warn(message: string, ...args: unknown[]): void
-  error(message: string, ...args: unknown[]): void
-  debug?(message: string, ...args: unknown[]): void
-}
+import type { Logger } from './logger.js'
+
+/** @deprecated Use Logger */
+export type LoggerContract = Logger
 
 type TextCallParams = Parameters<typeof generateText<ToolSet>>[0]
 type StreamCallParams = Parameters<typeof streamText<ToolSet>>[0]
@@ -73,7 +71,7 @@ function sleep(ms: number): Promise<void> {
  */
 export class AiManager {
   private config: AiConfig
-  private logger?: LoggerContract
+  private logger?: Logger
   private circuitBreaker: CircuitBreaker
   private costTracker: CostTracker
   private toolRegistry: ToolRegistry
@@ -85,7 +83,7 @@ export class AiManager {
 
   constructor(
     config: AiConfig,
-    logger?: LoggerContract,
+    logger?: Logger,
     costTracker?: CostTracker,
     toolRegistry?: ToolRegistry,
     catalog?: ModelsDevSource,

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import type { z } from 'zod'
-import type { LoggerContract } from '../ai_manager.js'
+import type { Logger } from '../logger.js'
 import { agentManifestSchema, type ToolPermission } from './manifest.js'
 
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -30,7 +30,7 @@ export interface AgentPromptConfig {
 export interface AgentLoaderOptions {
   configsDir?: string
   skillsDir?: string
-  logger?: LoggerContract
+  logger?: Logger
   schemaResolver?: (name: string) => z.ZodTypeAny | undefined
 }
 
@@ -38,7 +38,7 @@ export class AgentLoader {
   private cache = new Map<string, AgentPromptConfig>()
   private configsDir?: string
   private skillsDir?: string
-  private logger?: LoggerContract
+  private logger?: Logger
   private schemaResolver?: (name: string) => z.ZodTypeAny | undefined
 
   constructor(options: AgentLoaderOptions = {}) {
@@ -52,7 +52,7 @@ export class AgentLoader {
     this.schemaResolver = resolver
   }
 
-  setLogger(logger: LoggerContract) {
+  setLogger(logger: Logger) {
     this.logger = logger
   }
 

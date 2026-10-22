@@ -3,7 +3,7 @@ import type { LanguageModel } from 'ai'
 import type { ConfirmationService } from '../guard/confirmation.js'
 import type { AiDriver } from '../types.js'
 import { AiException, ProviderConfigError } from '../errors.js'
-import type { LoggerContract } from '../ai_manager.js'
+import type { Logger } from '../logger.js'
 import type {
   AcpAgentRuntimeConfig,
   AcpMcpServerConfig,
@@ -99,7 +99,7 @@ export function buildAgentEnv(
 }
 
 export interface AcpDriverDeps {
-  logger?: LoggerContract
+  logger?: Logger
   /** Answers agent permission requests when `permissionPolicy` is `ask`. */
   confirmation?: ConfirmationService
   /** Environment to derive the agent environment from. Default: `process.env` */
@@ -110,7 +110,7 @@ export class AcpDriver implements AiDriver {
   readonly name: string
   readonly defaultModel: string
   private config: AcpProviderConfig
-  private logger?: LoggerContract
+  private logger?: Logger
   private confirmation?: ConfirmationService
   private env: Record<string, string | undefined>
   private cachedModels: Map<string, Promise<LanguageModel>> = new Map()
