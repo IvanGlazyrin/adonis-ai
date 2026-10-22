@@ -6,8 +6,26 @@ interface InternalStats {
   failures: number
   successes: number
   inFlightProbes: number
+  /** Bumped on every state change and reset; a permit from an older epoch no longer owns a probe slot. */
+  epoch: number
   lastFailureTime: number | null
   nextAttemptAllowedAt: number | null
+}
+
+/**
+ * A reservation obtained from `CircuitBreaker.acquire()`. It settles exactly once: after the first
+ * `success()`, `failure()` or `release()`, further calls do nothing.
+ */
+export interface BreakerPermit {
+  readonly key: string
+  /** True when this permit occupies a half-open probe slot. */
+  readonly isProbe: boolean
+  /** Records a success (`recordSuccess`) and frees the probe slot. */
+  success(): void
+  /** Records a failure (`recordFailure`) and frees the probe slot. */
+  failure(error?: unknown): void
+  /** Frees the probe slot without recording anything (the outcome does not count). */
+  release(): void
 }
 
 /**
@@ -41,6 +59,7 @@ export class CircuitBreaker {
         failures: 0,
         successes: 0,
         inFlightProbes: 0,
+        epoch: 0,
         lastFailureTime: null,
         nextAttemptAllowedAt: null,
       }
@@ -68,6 +87,45 @@ export class CircuitBreaker {
   }
 
   /**
+   * Synchronously reserves a call slot. Returns `null` when the breaker is open or every half-open
+   * probe slot is taken. Unlike `isAvailable()`, a half-open permit holds a probe slot until settled.
+   */
+  acquire(key: string): BreakerPermit | null {
+    const s = this.getOrInitStats(key)
+    const state = this.getState(key)
+    if (state === 'open') return null
+
+    const isProbe = state === 'half_open'
+    if (isProbe) {
+      if (s.inFlightProbes >= this.halfOpenMaxConcurrent) return null
+      s.inFlightProbes++
+    }
+
+    const epoch = s.epoch
+    let settled = false
+    const settle = (): boolean => {
+      if (settled) return false
+      settled = true
+      if (isProbe && s.epoch === epoch) s.inFlightProbes = Math.max(0, s.inFlightProbes - 1)
+      return true
+    }
+
+    return {
+      key,
+      isProbe,
+      success: () => {
+        if (settle()) this.recordSuccess(key)
+      },
+      failure: (error?: unknown) => {
+        if (settle()) this.recordFailure(key, error)
+      },
+      release: () => {
+        settle()
+      },
+    }
+  }
+
+  /**
    * Runs `action` through the breaker.
    *
    * `isFailure` decides whether a thrown error counts against the breaker; errors that are the
@@ -78,38 +136,30 @@ export class CircuitBreaker {
     action: () => Promise<T>,
     isFailure: (error: unknown) => boolean = () => true
   ): Promise<T> {
-    const s = this.getOrInitStats(key)
-    const state = this.getState(key)
+    const permit = this.acquire(key)
 
-    if (state === 'open') {
-      const remainingMs = s.nextAttemptAllowedAt
-        ? Math.max(0, s.nextAttemptAllowedAt - Date.now())
-        : this.recoveryTimeoutMs
-      throw new ProviderUnavailableError(
-        key,
-        `Circuit breaker is OPEN. Cooldown remaining: ${Math.ceil(remainingMs / 1000)}s`
-      )
-    }
-
-    const isProbe = state === 'half_open'
-    if (isProbe) {
-      if (s.inFlightProbes >= this.halfOpenMaxConcurrent) {
-        throw new ProviderUnavailableError(key, 'Circuit breaker is HALF-OPEN and probe limit is reached')
+    if (!permit) {
+      if (this.getState(key) === 'open') {
+        const s = this.getOrInitStats(key)
+        const remainingMs = s.nextAttemptAllowedAt
+          ? Math.max(0, s.nextAttemptAllowedAt - Date.now())
+          : this.recoveryTimeoutMs
+        throw new ProviderUnavailableError(
+          key,
+          `Circuit breaker is OPEN. Cooldown remaining: ${Math.ceil(remainingMs / 1000)}s`
+        )
       }
-      s.inFlightProbes++
+      throw new ProviderUnavailableError(key, 'Circuit breaker is HALF-OPEN and probe limit is reached')
     }
 
     try {
       const result = await action()
-      this.recordSuccess(key)
+      permit.success()
       return result
     } catch (error) {
-      if (isFailure(error)) {
-        this.recordFailure(key, error)
-      }
+      if (isFailure(error)) permit.failure(error)
+      else permit.release()
       throw error
-    } finally {
-      if (isProbe) s.inFlightProbes = Math.max(0, s.inFlightProbes - 1)
     }
   }
 
@@ -149,9 +199,14 @@ export class CircuitBreaker {
     s.failures = 0
     s.successes = 0
     s.inFlightProbes = 0
+    s.epoch++
     s.lastFailureTime = null
     s.nextAttemptAllowedAt = null
     this.transition(key, s, 'closed', prev)
+  }
+
+  resetAll(): void {
+    for (const key of [...this.stats.keys()]) this.reset(key)
   }
 
   getStats(key: string): CircuitBreakerStats {
@@ -189,6 +244,7 @@ export class CircuitBreaker {
   ): void {
     if (from === to) return
     stats.state = to
+    stats.epoch++
     if (to === 'half_open') {
       stats.successes = 0
       stats.inFlightProbes = 0
