@@ -7,7 +7,12 @@ import { ProviderFactoryRegistry } from '../../../src/models/provider_factories.
 test.group('LanguageModelFactory', () => {
   test('throws for unsupported provider npm package', async ({ assert }) => {
     await assert.rejects(
-      () => new LanguageModelFactory().create({ providerID: 'fake', modelID: 'x', npm: 'unknown-pkg' }),
+      () =>
+        new LanguageModelFactory().create({
+          providerID: 'fake',
+          modelID: 'x',
+          npm: 'unknown-pkg',
+        }),
       /unknown-pkg/
     )
   })
@@ -25,7 +30,10 @@ test.group('LanguageModelFactory', () => {
       apiKey: 'test-key',
       headers: { 'X-Test': 'yes' },
     })
-    assert.include(model as any, { id: 'test-model', provider: 'local-openai' })
+    assert.include(model as any, {
+      id: 'test-model',
+      provider: 'local-openai',
+    })
   })
 
   test('ACP model without runtime config is a config error', async ({ assert }) => {
@@ -114,26 +122,111 @@ test.group('LanguageModelFactory ACP options', () => {
     })
   })
 
-  test('shareDriver: false creates a driver per call and shutdown stops them all', async ({ assert }) => {
+  test('shareDriver: false creates a driver per call', async ({ assert }) => {
     await withStubbedAcp(async (served) => {
-      const factory = new LanguageModelFactory({ acp: { shareDriver: false, inheritEnv: true } })
+      const factory = new LanguageModelFactory({
+        acp: { shareDriver: false, inheritEnv: true },
+      })
       await factory.create(acpModel(process.cwd()) as any)
       await factory.create(acpModel(process.cwd()) as any)
       assert.notStrictEqual(served[0], served[1])
       assert.isTrue((served[0] as any).config.inheritEnv)
-
-      const stopped: AcpDriver[] = []
-      const originalShutdown = AcpDriver.prototype.shutdown
-      AcpDriver.prototype.shutdown = async function (this: AcpDriver) {
-        stopped.push(this)
-      }
-      try {
-        await factory.shutdown()
-      } finally {
-        AcpDriver.prototype.shutdown = originalShutdown
-      }
-      assert.sameMembers(stopped, served)
     })
+  })
+
+  test('shareDriver: false releases each driver when its call ends', async ({ assert }) => {
+    const original = AcpDriver.prototype.getModel
+    const originalShutdown = AcpDriver.prototype.shutdown
+    const stopped: AcpDriver[] = []
+    AcpDriver.prototype.getModel = async function () {
+      return {
+        doGenerate: async () => ({ text: 'ok' }),
+        doStream: async () => ({
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue('a')
+              controller.close()
+            },
+          }),
+        }),
+      } as any
+    }
+    AcpDriver.prototype.shutdown = async function (this: AcpDriver) {
+      stopped.push(this)
+    }
+    try {
+      const factory = new LanguageModelFactory({ acp: { shareDriver: false } })
+      const tracked = () => (factory as any).unsharedDrivers.size
+      for (let i = 0; i < 3; i++) {
+        const model = (await factory.create(acpModel(process.cwd()) as any)) as any
+        assert.equal(tracked(), 0, 'a created but not yet called model is not retained')
+        await model.doGenerate({})
+        assert.equal(tracked(), 0)
+      }
+      const streamed = (await factory.create(acpModel(process.cwd()) as any)) as any
+      const { stream } = await streamed.doStream({})
+      assert.equal(tracked(), 1, 'tracked while the stream is open')
+      const reader = stream.getReader()
+      while (!(await reader.read()).done);
+      assert.equal(tracked(), 0)
+
+      const cancelled = (await factory.create(acpModel(process.cwd()) as any)) as any
+      const second = await cancelled.doStream({})
+      await second.stream.cancel()
+      assert.equal(tracked(), 0)
+      assert.lengthOf(stopped, 5)
+    } finally {
+      AcpDriver.prototype.getModel = original
+      AcpDriver.prototype.shutdown = originalShutdown
+    }
+  })
+
+  test('shareDriver: false releases the driver when the call fails', async ({ assert }) => {
+    const original = AcpDriver.prototype.getModel
+    AcpDriver.prototype.getModel = async function () {
+      return {
+        doGenerate: async () => {
+          throw new Error('boom')
+        },
+      } as any
+    }
+    try {
+      const factory = new LanguageModelFactory({ acp: { shareDriver: false } })
+      const model = (await factory.create(acpModel(process.cwd()) as any)) as any
+      await assert.rejects(() => model.doGenerate({}), /boom/)
+      assert.equal((factory as any).unsharedDrivers.size, 0)
+    } finally {
+      AcpDriver.prototype.getModel = original
+    }
+  })
+
+  test('shutdown stops an unshared driver whose call is in flight', async ({ assert }) => {
+    const original = AcpDriver.prototype.getModel
+    const originalShutdown = AcpDriver.prototype.shutdown
+    const stopped: AcpDriver[] = []
+    let finish!: () => void
+    AcpDriver.prototype.getModel = async function () {
+      return {
+        doGenerate: () => new Promise((resolve) => (finish = () => resolve({ text: 'ok' }))),
+      } as any
+    }
+    AcpDriver.prototype.shutdown = async function (this: AcpDriver) {
+      stopped.push(this)
+    }
+    try {
+      const factory = new LanguageModelFactory({ acp: { shareDriver: false } })
+      const model = (await factory.create(acpModel(process.cwd()) as any)) as any
+      const call = model.doGenerate({})
+      assert.equal((factory as any).unsharedDrivers.size, 1)
+      await factory.shutdown()
+      assert.lengthOf(stopped, 1)
+      finish()
+      await call
+      assert.lengthOf(stopped, 1, 'not stopped twice')
+    } finally {
+      AcpDriver.prototype.getModel = original
+      AcpDriver.prototype.shutdown = originalShutdown
+    }
   })
 
   test('passes the confirmation service to the driver', async ({ assert }) => {

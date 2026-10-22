@@ -47,7 +47,7 @@ export class LanguageModelFactory {
   private readonly logger?: Logger
   private readonly acp: LanguageModelFactoryOptions['acp']
   private readonly drivers = new Map<string, AcpDriver>()
-  /** Drivers created with `shareDriver: false`; tracked so `shutdown()` can stop them. */
+  /** Unshared drivers with a call in flight; tracked so `shutdown()` can stop them. Emptied as calls end. */
   private readonly unsharedDrivers = new Set<AcpDriver>()
 
   constructor(options: LanguageModelFactoryOptions = {}) {
@@ -65,7 +65,9 @@ export class LanguageModelFactory {
     }
     const factory = await this.factories.get(model.npm)
 
-    this.logger?.info(`[LLM Provider] Creating SDK for ${model.providerID}/${model.modelID} (npm=${model.npm})`)
+    this.logger?.info(
+      `[LLM Provider] Creating SDK for ${model.providerID}/${model.modelID} (npm=${model.npm})`
+    )
     this.logger?.info(`[LLM Provider] Base URL: ${model.apiUrl}`)
     this.logger?.info(`[LLM Provider] Headers: ${JSON.stringify(redactHeaders(model.headers))}`)
 
@@ -114,9 +116,94 @@ export class LanguageModelFactory {
         { logger: this.logger, confirmation: this.acp?.confirmation, runtime }
       )
       if (shared) this.drivers.set(key, driver)
-      else this.unsharedDrivers.add(driver)
     }
-    return driver.getModel(agentId)
+    const languageModel = await driver.getModel(agentId)
+    return shared ? languageModel : this.releaseWhenCallEnds(driver, languageModel)
+  }
+
+  /**
+   * Wraps a per-call model so its driver is tracked only while a call is in flight and shut down
+   * when the last call ends (result, error, stream end or cancel). A model that is never called
+   * is not tracked, so it is collected together with its driver.
+   */
+  private releaseWhenCallEnds(driver: AcpDriver, model: LanguageModel): LanguageModel {
+    if (typeof model !== 'object' || model === null) return model
+    let inFlight = 0
+    const begin = () => {
+      inFlight++
+      this.unsharedDrivers.add(driver)
+    }
+    const end = () => {
+      if (--inFlight > 0) return
+      if (!this.unsharedDrivers.delete(driver)) return // shutdown() already stopped it
+      void driver
+        .shutdown()
+        .catch((err) => this.logger?.warn(`[LLM Provider] ACP driver shutdown failed: ${String(err)}`))
+    }
+
+    return new Proxy(model as object, {
+      get: (target, prop) => {
+        const value = Reflect.get(target, prop, target)
+        if (prop === 'doGenerate' && typeof value === 'function') {
+          return async (...args: unknown[]) => {
+            begin()
+            try {
+              return await value.apply(target, args)
+            } finally {
+              end()
+            }
+          }
+        }
+        if (prop === 'doStream' && typeof value === 'function') {
+          return async (...args: unknown[]) => {
+            begin()
+            let result: { stream: ReadableStream }
+            try {
+              result = await value.apply(target, args)
+            } catch (err) {
+              end()
+              throw err
+            }
+            return { ...result, stream: this.endWith(result.stream, end) }
+          }
+        }
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }) as LanguageModel
+  }
+
+  /** Re-exposes a stream, calling `done` exactly once when it ends, errors or is cancelled. */
+  private endWith<T>(source: ReadableStream<T>, done: () => void): ReadableStream<T> {
+    const reader = source.getReader()
+    let finished = false
+    const finish = () => {
+      if (finished) return
+      finished = true
+      done()
+    }
+    return new ReadableStream<T>({
+      async pull(controller) {
+        try {
+          const chunk = await reader.read()
+          if (chunk.done) {
+            finish()
+            controller.close()
+          } else {
+            controller.enqueue(chunk.value)
+          }
+        } catch (err) {
+          finish()
+          controller.error(err)
+        }
+      },
+      async cancel(reason) {
+        try {
+          await reader.cancel(reason)
+        } finally {
+          finish()
+        }
+      },
+    })
   }
 
   private createTimeoutFetch(): typeof fetch {
