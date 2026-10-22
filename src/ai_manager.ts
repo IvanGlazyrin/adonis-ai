@@ -108,6 +108,7 @@ export class AiManager {
         cachePath: config.catalog?.cachePath,
         overridePath: config.catalog?.overridePath,
         ttlMs: config.catalog?.ttlMs,
+        systemProviders: config.catalog?.systemProviders,
       })
     this.agentLoader =
       agentLoader ??

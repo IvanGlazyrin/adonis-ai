@@ -129,6 +129,12 @@ export interface CatalogConfig {
    */
   overridePath?: string
   /**
+   * Which system providers to inject into the catalog when missing: built-in
+   * `fallback` providers (openai / anthropic / google) and `acp` agents (`acp-<id>`).
+   * Both default to true.
+   */
+  systemProviders?: { fallback?: boolean; acp?: boolean }
+  /**
    * Whether to automatically fetch and update model pricing from models.dev into the budget tracker.
    * Default: true
    */
