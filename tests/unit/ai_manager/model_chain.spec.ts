@@ -186,4 +186,28 @@ test.group('AiManager model chain', () => {
     const result = await m.generateText({ prompt: 'x', models: [] })
     assert.equal(result.provider, 'main')
   })
+
+  test('the lazy LanguageModelFactory shares the manager ConfirmationService with ACP drivers', async ({ assert }) => {
+    const m = new AiManager(
+      defineConfig({
+        default: 'main',
+        providers: { main: { driver: 'custom', factory: () => textModel('main', 'x'), defaultModel: 'm' } },
+        catalog: { autoPricing: false },
+      } as never),
+      { info() {}, warn() {}, error() {}, debug() {} }
+    )
+    const factory = (m as any).languageModels as LanguageModelFactory
+    assert.strictEqual((factory as any).acp.confirmation, m.getConfirmationService())
+    await m.shutdown()
+  })
+
+  test('a mixed chain with a string entry and no resolver is rejected before any attempt', async ({ assert }) => {
+    const a = textModel('a', 'x')
+    const m = manager({ a })
+    await assert.rejects(
+      () => m.generateText({ prompt: 'x', models: [resolved('a', 'key:1'), 'openai/gpt-4o'] }),
+      ProviderConfigError as never
+    )
+    assert.equal(a.doGenerateCalls.length, 0)
+  })
 })

@@ -1,6 +1,6 @@
 import { test } from '@japa/runner'
 import { CircuitBreaker } from '../../../src/circuit_breaker.js'
-import { ProviderUnavailableError } from '../../../src/errors.js'
+import { AiException, ProviderConfigError, ProviderUnavailableError } from '../../../src/errors.js'
 import {
   buildChainCandidates,
   runModelChain,
@@ -656,5 +656,82 @@ test.group('runModelChain', () => {
     const out = await runModelChain(buildChainCandidates({ chain: [A, B] }), attempt)
     assert.equal(out.key, 'b/m')
     assert.lengthOf(calls, 2)
+  })
+})
+
+test.group('runModelChain skip errors and async onFallback', () => {
+  test('falls through on a missing provider package without counting against the breaker', async ({ assert }) => {
+    const breaker = new CircuitBreaker({ failureThreshold: 1 })
+    const events: FallbackEvent[] = []
+    const { calls, attempt } = harness({
+      'a/m': async () => {
+        throw new AiException('missing', 'E_AI_MISSING_DEPENDENCY')
+      },
+    })
+    const out = await runModelChain(buildChainCandidates({ chain: [A, B] }), attempt, {
+      breaker,
+      onFallback: (e) => events.push(e),
+    })
+    assert.equal(out.key, 'b/m')
+    assert.lengthOf(calls, 2)
+    assert.lengthOf(events, 1)
+    assert.equal(breaker.getState('a/m'), 'closed')
+    assert.equal(breaker.getStats('a/m').failures, 0)
+  })
+
+  test('falls through on a config error and on ProviderUnavailableError', async ({ assert }) => {
+    const { attempt } = harness({
+      'a/m': async () => {
+        throw new ProviderConfigError('a', 'bad')
+      },
+      'b/m': async () => {
+        throw new ProviderUnavailableError('b', 'open')
+      },
+    })
+    const c: ResolvedModel = { providerID: 'c', modelID: 'm' }
+    const out = await runModelChain(buildChainCandidates({ chain: [A, B, c] }), attempt)
+    assert.equal(out.key, 'c/m')
+  })
+
+  test('a skip error on the last candidate is thrown', async ({ assert }) => {
+    const { attempt } = harness({
+      'b/m': async () => {
+        throw new ProviderConfigError('b', 'bad')
+      },
+    })
+    await assert.rejects(() => runModelChain(buildChainCandidates({ chain: [B] }), attempt), /bad/)
+  })
+
+  test('a ref candidate without a resolver throws ProviderConfigError before any attempt', async ({ assert }) => {
+    const { calls, attempt } = harness()
+    try {
+      await runModelChain(buildChainCandidates({ defaults: [GPT] }), attempt)
+      assert.fail('expected rejection')
+    } catch (error) {
+      assert.instanceOf(error, ProviderConfigError)
+    }
+    assert.lengthOf(calls, 0)
+  })
+
+  test('an async onFallback that rejects is caught and does not affect the result', async ({ assert }) => {
+    const unhandled: unknown[] = []
+    const listener = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', listener)
+    const warnings: string[] = []
+    try {
+      const { attempt } = harness({ 'a/m': failWith('down', 503) })
+      const out = await runModelChain(buildChainCandidates({ chain: [A, B] }), attempt, {
+        onFallback: async () => {
+          throw new Error('handler boom')
+        },
+        logger: { info() {}, debug() {}, error() {}, warn: (m: string) => void warnings.push(m) },
+      })
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      assert.equal(out.key, 'b/m')
+      assert.deepEqual(unhandled, [])
+      assert.isTrue(warnings.some((w) => w.includes('handler boom')))
+    } finally {
+      process.removeListener('unhandledRejection', listener)
+    }
   })
 })

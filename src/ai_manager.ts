@@ -287,7 +287,10 @@ export class AiManager {
   private get languageModels(): LanguageModelFactory {
     return (
       this.config.languageModels ??
-      (this.lazyLanguageModels ??= new LanguageModelFactory({ logger: this.logger }))
+      (this.lazyLanguageModels ??= new LanguageModelFactory({
+        logger: this.logger,
+        acp: { confirmation: this.confirmation },
+      }))
     )
   }
 
@@ -433,6 +436,11 @@ export class AiManager {
     operation: (ctx: AttemptContext) => Promise<T>
   ): Promise<{ result: T; provider: string; model: string }> {
     request.abortSignal?.throwIfAborted()
+
+    const stringEntry = models.find((m): m is string => typeof m === 'string' && m !== '')
+    if (stringEntry !== undefined && !this.config.resolver) {
+      throw new ProviderConfigError('model-chain', `a resolver is required to resolve "${stringEntry}"`)
+    }
 
     const { result, model } = await runModelChain(
       toChainCandidates(models),

@@ -77,8 +77,8 @@ export interface ModelChainOptions {
   /** Required when a candidate is a `ref`. */
   resolver?: ModelResolver
   abortSignal?: AbortSignal
-  /** Exceptions thrown by the handler are swallowed (logged as a warning). */
-  onFallback?: (event: FallbackEvent) => void
+  /** Exceptions thrown or rejected by the handler are swallowed (logged as a warning); it is not awaited. */
+  onFallback?: (event: FallbackEvent) => unknown
   logger?: Logger
 }
 
@@ -93,6 +93,13 @@ export async function runModelChain<T>(
   options: ModelChainOptions = {}
 ): Promise<{ result: T; model: ResolvedModel; key: string }> {
   const { breaker, resolver, abortSignal, logger } = options
+  const unresolved = candidates.find((c) => c.kind === 'ref')
+  if (unresolved && !resolver) {
+    throw new ProviderConfigError(
+      'model-chain',
+      `a resolver is required to resolve "${(unresolved as { ref: string }).ref}"`
+    )
+  }
   let lastError: unknown
   let hasError = false
   let attempted = 0
@@ -116,10 +123,7 @@ export async function runModelChain<T>(
       if (candidate.kind === 'resolved') {
         model = candidate.model
       } else {
-        if (!resolver) {
-          throw new ProviderConfigError('model-chain', `a resolver is required to resolve "${candidate.ref}"`)
-        }
-        model = await resolver.resolve(candidate.ref)
+        model = await resolver!.resolve(candidate.ref)
       }
 
       attempted++
@@ -143,7 +147,8 @@ export async function runModelChain<T>(
         else permit?.release()
 
         const next = nextAvailable(candidates, i + 1, breaker)
-        if (classification.kind !== 'retryable' || toolsExecuted || !next) {
+        const canFallBack = classification.kind === 'retryable' || classification.kind === 'skip'
+        if (!canFallBack || toolsExecuted || !next) {
           logger?.warn(
             `[model-chain] ${candidate.key} failed with ${classification.errorClass}; not falling back ` +
               `(kind=${classification.kind}, toolsExecuted=${toolsExecuted}, hasNext=${Boolean(next)})`
@@ -155,12 +160,17 @@ export async function runModelChain<T>(
           `[model-chain] ${candidate.key} failed with ${classification.errorClass}; falling back to ${next.key}`
         )
         try {
-          options.onFallback?.({
+          const pending = options.onFallback?.({
             fromModel: candidate.key,
             toModel: next.key,
             error,
             errorClass: classification.errorClass,
           })
+          if (pending && typeof (pending as PromiseLike<void>).then === 'function') {
+            Promise.resolve(pending).catch((handlerError) => {
+              logger?.warn(`[model-chain] onFallback handler rejected: ${String(handlerError)}`)
+            })
+          }
         } catch (handlerError) {
           logger?.warn(`[model-chain] onFallback handler threw: ${String(handlerError)}`)
         }

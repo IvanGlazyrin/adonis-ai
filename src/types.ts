@@ -210,7 +210,7 @@ export interface ModelChainCallOptions {
    */
   models?: Array<ResolvedModel | string>
   /** Called when a model failed with a retryable error and the next entry is about to be tried. */
-  onFallback?: (event: FallbackEvent) => void
+  onFallback?: (event: FallbackEvent) => unknown
 }
 
 export interface AiDriver {
