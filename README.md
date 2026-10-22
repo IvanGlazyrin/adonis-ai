@@ -304,6 +304,29 @@ The `sourcecraft` and `freebuff` default agents are deprecated and will be remov
 
 ---
 
+### 7. Dynamic Credentials & Model Chains
+
+Apps with per-user credentials can't use a static provider cascade. Pass `models` — an ordered chain of
+`ResolvedModel | string` — to `generateText`, `streamText` or `generateObject`; the provider cascade is then not used.
+
+```ts
+const result = await ai.generateText({
+  prompt: 'Summarize this',
+  models: [userKeyModel, teamKeyModel, 'anthropic/claude-sonnet-4-5'],
+  onFallback: ({ fromModel, toModel, errorClass }) => log.warn(`${fromModel} -> ${toModel} (${errorClass})`),
+})
+result.provider // providerID of the model that answered
+result.model    // its modelID
+```
+
+- Entries are tried in order. Only retryable failures (429, 5xx, network) move on to the next entry; bad requests,
+  aborts and any failure after a tool has run are thrown as is. `streamText` falls back on errors before the first chunk.
+- Each entry has its own circuit breaker, keyed by `credentialKey` when present (so one bad key doesn't block the others).
+- String entries are resolved through `config.resolver` (e.g. a `CatalogModelResolver`); without one a `ProviderConfigError` is thrown.
+- Models are built by `config.languageModels` (a `LanguageModelFactory`); when absent a default one is created lazily.
+  `manager.shutdown()` shuts it down (stops ACP agents).
+- `schema`, `stopWhen`, `maxRetries` and `onStepFinish` work on the chain path too. Empty `models` uses the provider cascade.
+
 ## Ace CLI Commands
 
 `adonis-ai-kit` registers helpful Ace commands:

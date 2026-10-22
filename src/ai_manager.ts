@@ -17,6 +17,13 @@ import { ModelsDevSource, resolveCatalogProviderId } from './catalog/source.js'
 import { AgentLoader, type AgentPromptConfig } from './agents/loader.js'
 import { AgentRunner, type AgentRunnerOptions } from './agents/agent_runner.js'
 import type { AcpProviderConfig } from './acp/types.js'
+import {
+  LanguageModelFactory,
+  buildChainCandidates,
+  runModelChain,
+  type ChainCandidate,
+  type ResolvedModel,
+} from './models/index.js'
 import type {
   AiConfig,
   AiDriver,
@@ -25,6 +32,7 @@ import type {
   GenerateObjectResult,
   GenerateTextOptions,
   GenerateTextResult,
+  ModelChainCallOptions,
   ProviderConfig,
   StreamTextOptions,
   StreamTextResult,
@@ -45,10 +53,43 @@ interface AttemptState {
 }
 
 interface AttemptContext {
-  driver: AiDriver
+  /** Builds the language model for this attempt (driver model in a cascade, factory model in a chain). */
+  getModel: () => Promise<LanguageModel> | LanguageModel
   modelName: string
   providerName: string
+  /** Circuit breaker key of this attempt. */
+  breakerKey: string
   state: AttemptState
+}
+
+type ChainRequest = ModelChainCallOptions & {
+  provider?: string
+  model?: string
+  abortSignal?: AbortSignal
+}
+
+/** `ResolvedModel` entries keep their order; strings become `ref` candidates. Same dedupe rules as `buildChainCandidates`. */
+function toChainCandidates(models: Array<ResolvedModel | string>): ChainCandidate[] {
+  if (models.every((m): m is ResolvedModel => typeof m !== 'string')) {
+    return buildChainCandidates({ chain: models })
+  }
+  const candidates: ChainCandidate[] = []
+  const seenRefs = new Set<string>()
+  const seenEntries = new Set<string>()
+  for (const entry of models) {
+    if (typeof entry === 'string') {
+      if (!entry || seenRefs.has(entry)) continue
+      seenRefs.add(entry)
+      candidates.push({ kind: 'ref', ref: entry, key: entry })
+      continue
+    }
+    const [candidate] = buildChainCandidates({ chain: [entry] })
+    const entryId = `${candidate.key}|${entry.providerID}/${entry.modelID}`
+    if (seenEntries.has(entryId)) continue
+    seenEntries.add(entryId)
+    candidates.push(candidate)
+  }
+  return candidates
 }
 
 type ModelFactory = (modelId: string) => LanguageModel
@@ -80,6 +121,7 @@ export class AiManager {
   private agentLoader: AgentLoader
   private drivers: Map<string, Promise<AiDriver>> = new Map()
   private pricingWarmups: Map<string, Promise<void>> = new Map()
+  private lazyLanguageModels?: LanguageModelFactory
 
   constructor(
     config: AiConfig,
@@ -228,6 +270,8 @@ export class AiManager {
    * Call on application shutdown.
    */
   async shutdown(): Promise<void> {
+    const languageModels = this.config.languageModels ?? this.lazyLanguageModels
+    this.lazyLanguageModels = undefined
     const drivers = [...this.drivers.values()]
     this.drivers.clear()
     const settled = await Promise.allSettled(drivers)
@@ -236,7 +280,15 @@ export class AiManager {
         if (entry.status === 'fulfilled') await entry.value.shutdown?.()
       })
     )
+    await Promise.allSettled([languageModels?.shutdown()])
     this.confirmation.dispose()
+  }
+
+  private get languageModels(): LanguageModelFactory {
+    return (
+      this.config.languageModels ??
+      (this.lazyLanguageModels ??= new LanguageModelFactory({ logger: this.logger }))
+    )
   }
 
   /**
@@ -244,18 +296,17 @@ export class AiManager {
    */
   private warmPricing(providerName: string, modelName: string): Promise<void> {
     if (this.config.catalog?.autoPricing === false) return Promise.resolve()
+    // Chain models are not configured providers: their provider id is already a catalog id.
     const pConfig = this.config.providers[providerName]
-    if (!pConfig || pConfig.driver === 'acp') return Promise.resolve()
+    if (pConfig?.driver === 'acp') return Promise.resolve()
+    const catalogProviderId = pConfig ? resolveCatalogProviderId(pConfig.driver) : providerName
 
     const key = `${providerName}/${modelName}`
     let warmup = this.pricingWarmups.get(key)
     if (!warmup) {
       warmup = (async () => {
         try {
-          const pricing = await this.catalog.getModelPricing(
-            resolveCatalogProviderId(pConfig.driver),
-            modelName
-          )
+          const pricing = await this.catalog.getModelPricing(catalogProviderId, modelName)
           if (pricing) {
             this.costTracker.setPricing({ [modelName]: pricing, [key]: pricing })
           }
@@ -279,9 +330,13 @@ export class AiManager {
    * - The circuit breaker is keyed by `provider:model`.
    */
   private async executeWithFallback<T>(
-    request: { provider?: string; model?: string; abortSignal?: AbortSignal },
+    request: ChainRequest,
     operation: (ctx: AttemptContext) => Promise<T>
   ): Promise<{ result: T; provider: string; model: string }> {
+    if (request.models && request.models.length > 0) {
+      return this.executeOverChain(request, request.models, operation)
+    }
+
     let targetProvider = request.provider
     let targetModel = request.model
 
@@ -333,7 +388,14 @@ export class AiManager {
         const driver = await this.use(providerName)
         const result = await this.circuitBreaker.execute(
           breakerKey,
-          () => operation({ driver, modelName, providerName, state }),
+          () =>
+            operation({
+              getModel: () => driver.getModel(modelName),
+              modelName,
+              providerName,
+              breakerKey,
+              state,
+            }),
           (err) => classifyError(err, request.abortSignal).countsAsFailure
         )
         return { result, provider: providerName, model: modelName }
@@ -359,6 +421,48 @@ export class AiManager {
     }
 
     throw new CascadingFallbackError(attempts)
+  }
+
+  /**
+   * Executes an operation over an explicit chain of models. The provider cascade is not used; the
+   * chain is authoritative and every entry has its own per-credential circuit breaker.
+   */
+  private async executeOverChain<T>(
+    request: ChainRequest,
+    models: Array<ResolvedModel | string>,
+    operation: (ctx: AttemptContext) => Promise<T>
+  ): Promise<{ result: T; provider: string; model: string }> {
+    request.abortSignal?.throwIfAborted()
+
+    const { result, model } = await runModelChain(
+      toChainCandidates(models),
+      (attempt) => {
+        // `state.toolsExecuted = true` inside prepareTools tells the chain not to fall back.
+        const state: AttemptState = {
+          get toolsExecuted() {
+            return false
+          },
+          set toolsExecuted(value: boolean) {
+            if (value) attempt.markToolsExecuted()
+          },
+        }
+        return operation({
+          getModel: () => this.languageModels.create(attempt.model),
+          modelName: attempt.model.modelID,
+          providerName: attempt.model.providerID,
+          breakerKey: attempt.key,
+          state,
+        })
+      },
+      {
+        breaker: this.circuitBreaker,
+        resolver: this.config.resolver,
+        abortSignal: request.abortSignal,
+        onFallback: request.onFallback,
+        logger: this.logger,
+      }
+    )
+    return { result, provider: model.providerID, model: model.modelID }
   }
 
   /**
@@ -495,9 +599,9 @@ export class AiManager {
 
     const { result, provider, model } = await this.executeWithFallback(
       options,
-      async ({ driver, modelName, providerName, state }) => {
+      async ({ getModel, modelName, providerName, state }) => {
         void this.warmPricing(providerName, modelName)
-        const languageModel = await driver.getModel(modelName)
+        const languageModel = await getModel()
         const params = this.buildTextParams(options, languageModel, state, options.abortSignal)
         return generateText(
           options.schema ? ({ ...params, output: Output.object({ schema: options.schema }) } as TextCallParams) : params
@@ -557,10 +661,10 @@ export class AiManager {
     })
 
     const { result: raw, provider, model } = await this.executeWithFallback(
-      { provider: options.provider, model: options.model, abortSignal: signal },
-      async ({ driver, modelName, providerName, state }) => {
+      { ...options, abortSignal: signal },
+      async ({ getModel, modelName, providerName, breakerKey, state }) => {
         const pricingReady = this.warmPricing(providerName, modelName)
-        const languageModel = await driver.getModel(modelName)
+        const languageModel = await getModel()
 
         let attemptFailed = false
         let accounted = false
@@ -601,9 +705,9 @@ export class AiManager {
           },
           onError: ({ error }) => {
             if (!streamStarted) return // surfaced through the first-part check below
-            this.logger?.warn?.(`[AiManager] Stream error on "${providerName}:${modelName}": ${String(error)}`)
+            this.logger?.warn?.(`[AiManager] Stream error on "${breakerKey}": ${String(error)}`)
             if (classifyError(error, signal).countsAsFailure) {
-              this.circuitBreaker.recordFailure(`${providerName}:${modelName}`, error)
+              this.circuitBreaker.recordFailure(breakerKey, error)
             }
             finish(EMPTY_USAGE, '')
           },
@@ -677,9 +781,9 @@ export class AiManager {
 
     const { result, provider, model } = await this.executeWithFallback(
       options,
-      async ({ driver, modelName, providerName, state }) => {
+      async ({ getModel, modelName, providerName, state }) => {
         void this.warmPricing(providerName, modelName)
-        const languageModel = await driver.getModel(modelName)
+        const languageModel = await getModel()
         const params = this.buildTextParams(options, languageModel, state, options.abortSignal)
         return generateText({
           ...params,

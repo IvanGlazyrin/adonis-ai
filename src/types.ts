@@ -12,6 +12,10 @@ import type { ModelPricing } from './budget/types.js'
 import type { ActionGuard, ToolPermission } from './guard/types.js'
 import type { ConfirmationService } from './guard/confirmation.js'
 import type { AcpProviderConfig } from './acp/types.js'
+import type { ModelResolver } from './models/catalog_resolver.js'
+import type { LanguageModelFactory } from './models/language_model_factory.js'
+import type { FallbackEvent } from './models/model_chain.js'
+import type { ResolvedModel } from './models/types.js'
 
 export type CircuitBreakerState = 'closed' | 'open' | 'half_open'
 
@@ -192,6 +196,21 @@ export interface AiConfig {
    * Whether to log detailed AI calls
    */
   logging?: boolean
+  /** Resolves string entries of a call's `models` chain. Required to use model references there. */
+  resolver?: ModelResolver
+  /** Builds language models for `models` chains. Defaults to a `LanguageModelFactory` created lazily. */
+  languageModels?: LanguageModelFactory
+}
+
+/** Options shared by calls that can run over a dynamic model chain. */
+export interface ModelChainCallOptions {
+  /**
+   * Ordered chain of models (resolved models or references). When non-empty, the provider cascade
+   * is not used: each entry is tried in order with its own per-credential circuit breaker.
+   */
+  models?: Array<ResolvedModel | string>
+  /** Called when a model failed with a retryable error and the next entry is about to be tried. */
+  onFallback?: (event: FallbackEvent) => void
 }
 
 export interface AiDriver {
@@ -233,7 +252,7 @@ export interface ToolGuardOptions {
   timeoutMs?: number
 }
 
-export interface GenerateTextOptions {
+export interface GenerateTextOptions extends ModelChainCallOptions {
   prompt?: string
   messages?: ModelMessage[]
   system?: string
@@ -318,7 +337,7 @@ export interface StreamTextResult {
   rawStream: AiStreamTextResult<ToolSet, any, any>
 }
 
-export interface GenerateObjectOptions<T> {
+export interface GenerateObjectOptions<T> extends ModelChainCallOptions {
   prompt?: string
   messages?: ModelMessage[]
   system?: string
