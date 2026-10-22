@@ -2,6 +2,8 @@ import type { z } from 'zod'
 import type {
   LanguageModel,
   ModelMessage,
+  StepResult,
+  StopCondition,
   StreamTextResult as AiStreamTextResult,
   TextStreamPart,
   ToolSet,
@@ -251,6 +253,14 @@ export interface GenerateTextOptions {
   toolPermissions?: Record<string, ToolPermission>
   /** Maximum number of model steps in a tool loop (mapped to `stopWhen: stepCountIs(n)`). */
   maxSteps?: number
+  /** Custom stop condition(s) for the tool loop. Takes precedence over `maxSteps`. */
+  stopWhen?: StopCondition<ToolSet> | StopCondition<ToolSet>[]
+  /** Structured output schema; the parsed value is exposed as `output`. Works together with `tools`. */
+  schema?: z.ZodType
+  /** Provider call retries performed by the AI SDK (SDK default applies when omitted). */
+  maxRetries?: number
+  /** Called after every model step. Callback errors are logged and ignored. */
+  onStepFinish?: (step: StepResult<ToolSet>) => void | Promise<void>
   agentName?: string
   abortSignal?: AbortSignal
   metadata?: Record<string, unknown>
@@ -267,6 +277,8 @@ export interface GenerateTextResult {
   toolCalls?: unknown[]
   toolResults?: unknown[]
   steps?: unknown[]
+  /** Parsed structured output, present when `schema` was given. */
+  output?: unknown
   /** Provider response metadata (`result.response` of the AI SDK). */
   rawResponse?: unknown
   durationMs: number
@@ -287,6 +299,8 @@ export interface StreamTextResult {
   model: string
   /** Resolves when the stream ends, is aborted, or fails (never rejects, never hangs forever). */
   usage: Promise<TokenUsage>
+  /** Parsed structured output (resolves to `undefined` when no `schema` was given). */
+  output: Promise<unknown>
   toTextStreamResponse(headers?: Record<string, string>): Response
   /** AI SDK UI message stream (compatible with `useChat`). */
   toUIMessageStreamResponse(

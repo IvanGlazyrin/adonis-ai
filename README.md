@@ -182,6 +182,29 @@ export default class ChatController {
 }
 ```
 
+#### Structured output with tools in a stream
+
+`schema`, `stopWhen`, `maxRetries` and `onStepFinish` work for both `generateText` and `streamText`:
+
+```ts
+import { stepCountIs } from 'ai'
+import { z } from 'zod'
+
+const stream = await ai.streamText({
+  prompt: 'Find the cheapest flight and summarise it.',
+  tools: { searchFlights },
+  schema: z.object({ airline: z.string(), priceUsd: z.number() }),
+  stopWhen: stepCountIs(6), // takes precedence over `maxSteps`
+  maxRetries: 0, // fail fast, let the fallback chain take over
+  onStepFinish: (step) => console.log('step done', step.finishReason),
+})
+
+for await (const part of stream.fullStream) {
+  // forward parts to the client...
+}
+const flight = await stream.output // parsed against the schema
+```
+
 ---
 
 ### 4. Tool Security Guardrails & Human-in-the-Loop (HITL)

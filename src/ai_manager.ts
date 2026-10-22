@@ -1,5 +1,5 @@
 import { generateText, streamText, stepCountIs, Output } from 'ai'
-import type { LanguageModel, ModelMessage, ToolSet } from 'ai'
+import type { LanguageModel, ModelMessage, StepResult, ToolSet } from 'ai'
 import { CostTracker } from './budget/cost_tracker.js'
 import type { ModelPricing } from './budget/types.js'
 import { ConfirmationService } from './guard/confirmation.js'
@@ -420,7 +420,17 @@ export class AiManager {
       topP: options.topP,
       maxOutputTokens,
       tools: this.prepareTools(options, state),
-      stopWhen: options.maxSteps ? stepCountIs(options.maxSteps) : undefined,
+      stopWhen: options.stopWhen ?? (options.maxSteps ? stepCountIs(options.maxSteps) : undefined),
+      maxRetries: options.maxRetries,
+      onStepFinish: options.onStepFinish
+        ? async (step: StepResult<ToolSet>) => {
+            try {
+              await options.onStepFinish?.(step)
+            } catch (err) {
+              this.logger?.warn?.(`[AiManager] onStepFinish callback failed: ${String(err)}`)
+            }
+          }
+        : undefined,
       abortSignal: signal,
     }
 
@@ -488,7 +498,10 @@ export class AiManager {
       async ({ driver, modelName, providerName, state }) => {
         void this.warmPricing(providerName, modelName)
         const languageModel = await driver.getModel(modelName)
-        return generateText(this.buildTextParams(options, languageModel, state, options.abortSignal))
+        const params = this.buildTextParams(options, languageModel, state, options.abortSignal)
+        return generateText(
+          options.schema ? ({ ...params, output: Output.object({ schema: options.schema }) } as TextCallParams) : params
+        )
       }
     )
 
@@ -517,6 +530,8 @@ export class AiManager {
       toolCalls: result.toolCalls,
       toolResults: result.toolResults,
       steps: result.steps,
+      // `output` throws when no output was specified, so read it only for schema calls.
+      output: options.schema ? result.output : undefined,
       rawResponse: result.response,
       durationMs,
     }
@@ -580,6 +595,7 @@ export class AiManager {
         const params = this.buildTextParams(options, languageModel, state, signal)
         const stream = streamText({
           ...params,
+          ...(options.schema ? { output: Output.object({ schema: options.schema }) } : {}),
           onChunk: ({ chunk }) => {
             if (chunk.type === 'text-delta') options.onChunk?.(chunk.text)
           },
@@ -620,12 +636,17 @@ export class AiManager {
       }
     )
 
+    // Without a schema the SDK's `output` rejects; expose `undefined` instead.
+    const output: Promise<unknown> = options.schema ? Promise.resolve(raw.output) : Promise.resolve(undefined)
+    output.catch(() => {}) // a never-read rejection must not surface as unhandled
+
     return {
       textStream: raw.textStream,
       fullStream: raw.fullStream,
       provider,
       model,
       usage: usagePromise,
+      output,
       toTextStreamResponse: (headers) => raw.toTextStreamResponse({ headers }),
       toUIMessageStreamResponse: (opts) => raw.toUIMessageStreamResponse(opts),
       toDataStreamResponse: (headers) => raw.toUIMessageStreamResponse({ headers }),
