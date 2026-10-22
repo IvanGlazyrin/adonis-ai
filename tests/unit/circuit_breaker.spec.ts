@@ -78,3 +78,57 @@ test.group('CircuitBreaker permits', () => {
     probe.release()
   })
 })
+
+test.group('CircuitBreaker.execute slot handling', () => {
+  test('a throwing isFailure leaves no probe slot taken', async ({ assert }) => {
+    const b = cb()
+    b.recordFailure('k')
+    await assert.rejects(
+      () =>
+        b.execute(
+          'k',
+          async () => {
+            throw new Error('x')
+          },
+          () => {
+            throw new Error('classifier broke')
+          }
+        ),
+      /classifier broke/
+    )
+    assert.isNotNull(b.acquire('k'))
+  })
+
+  test('execute releases the slot on a non-counted error', async ({ assert }) => {
+    const b = cb()
+    b.recordFailure('k')
+    await assert.rejects(
+      () =>
+        b.execute(
+          'k',
+          async () => {
+            throw new Error('caller fault')
+          },
+          () => false
+        ),
+      /caller fault/
+    )
+    assert.isNotNull(b.acquire('k'))
+  })
+
+  test('permit.failure() in half-open re-opens the breaker', ({ assert }) => {
+    const transitions: string[] = []
+    const b = new CircuitBreaker({
+      failureThreshold: 1,
+      recoveryTimeoutMs: 0,
+      halfOpenMaxConcurrent: 1,
+      onStateChange: (_key, from, to) => void transitions.push(`${from}->${to}`),
+    })
+    b.recordFailure('k')
+    const p = b.acquire('k')!
+    assert.isTrue(p.isProbe)
+    transitions.length = 0
+    p.failure(new Error('still down'))
+    assert.deepEqual(transitions, ['half_open->open'])
+  })
+})

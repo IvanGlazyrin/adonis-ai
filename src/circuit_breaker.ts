@@ -160,6 +160,9 @@ export class CircuitBreaker {
       if (isFailure(error)) permit.failure(error)
       else permit.release()
       throw error
+    } finally {
+      // Covers a throwing `isFailure`; a no-op once the permit has been settled.
+      permit.release()
     }
   }
 
