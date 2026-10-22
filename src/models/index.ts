@@ -9,3 +9,10 @@ export { LanguageModelFactory } from './language_model_factory.js'
 export type { LanguageModelFactoryOptions } from './language_model_factory.js'
 export { CatalogModelResolver } from './catalog_resolver.js'
 export type { CatalogModelResolverOptions, ModelResolver } from './catalog_resolver.js'
+export { buildChainCandidates, runModelChain } from './model_chain.js'
+export type {
+  ChainAttempt,
+  ChainCandidate,
+  FallbackEvent,
+  ModelChainOptions,
+} from './model_chain.js'
