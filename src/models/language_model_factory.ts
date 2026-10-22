@@ -1,0 +1,130 @@
+import type { LanguageModel } from 'ai'
+import { AcpDriver } from '../acp/provider.js'
+import type { AcpPermissionPolicy } from '../acp/types.js'
+import { ProviderConfigError } from '../errors.js'
+import type { ConfirmationService } from '../guard/confirmation.js'
+import type { Logger } from '../logger.js'
+import { ProviderFactoryRegistry } from './provider_factories.js'
+import type { ResolvedModel } from './types.js'
+
+export interface LanguageModelFactoryOptions {
+  factories?: ProviderFactoryRegistry
+  /** Per-request fetch timeout. Default: 180_000 */
+  timeoutMs?: number
+  logger?: Logger
+  acp?: { permissionPolicy?: AcpPermissionPolicy; confirmation?: ConfirmationService }
+}
+
+const ACP_NPM = '@mcpc-tech/acp-ai-provider'
+const DEFAULT_TIMEOUT_MS = 180_000
+
+function redactHeaders(headers?: Record<string, string>): Record<string, string> | undefined {
+  if (!headers) return undefined
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => {
+      const lower = key.toLowerCase()
+      const sensitive =
+        lower.includes('authorization') || lower.includes('api-key') || lower.includes('x-api')
+      return [key, sensitive ? '***' : value]
+    })
+  )
+}
+
+function requestUrl(input: Parameters<typeof fetch>[0]): string {
+  return typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+}
+
+export class LanguageModelFactory {
+  private readonly factories: ProviderFactoryRegistry
+  private readonly timeoutMs: number
+  private readonly logger?: Logger
+  private readonly acp: LanguageModelFactoryOptions['acp']
+  private readonly drivers = new Map<string, AcpDriver>()
+
+  constructor(options: LanguageModelFactoryOptions = {}) {
+    this.factories = options.factories ?? new ProviderFactoryRegistry()
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    this.logger = options.logger
+    this.acp = options.acp
+  }
+
+  async create(model: ResolvedModel): Promise<LanguageModel> {
+    if (model.npm === ACP_NPM) return this.createAcp(model)
+
+    if (!model.npm) {
+      throw new ProviderConfigError(model.providerID, `Model "${model.modelID}" has no provider package`)
+    }
+    const factory = await this.factories.get(model.npm)
+
+    this.logger?.info(`[LLM Provider] Creating SDK for ${model.providerID}/${model.modelID} (npm=${model.npm})`)
+    this.logger?.info(`[LLM Provider] Base URL: ${model.apiUrl}`)
+    this.logger?.info(`[LLM Provider] Headers: ${JSON.stringify(redactHeaders(model.headers))}`)
+
+    return factory({
+      name: model.providerID,
+      apiKey: model.apiKey,
+      baseURL: model.apiUrl,
+      headers: model.headers,
+      fetch: this.createTimeoutFetch(),
+    }).languageModel(model.modelID)
+  }
+
+  /** Stops every ACP agent process started by this factory. */
+  async shutdown(): Promise<void> {
+    const drivers = [...this.drivers.values()]
+    this.drivers.clear()
+    await Promise.all(drivers.map((driver) => driver.shutdown()))
+  }
+
+  private async createAcp(model: ResolvedModel): Promise<LanguageModel> {
+    const runtime = model.acpConfig
+    if (!runtime) {
+      throw new ProviderConfigError(
+        model.providerID,
+        `ACP model "${model.modelID}" requires runtime config (resolve it with buildAcpRuntimeConfig)`
+      )
+    }
+
+    const agentId = model.acpAgentId ?? model.modelID
+    this.logger?.info(`[LLM Provider] Creating ACP agent for ${model.providerID}/${model.modelID}`)
+    this.logger?.info(`[LLM Provider] ACP command: ${runtime.command} (cwd: ${runtime.cwd})`)
+
+    const key = `${runtime.command}::${runtime.cwd}`
+    let driver = this.drivers.get(key)
+    if (!driver) {
+      driver = new AcpDriver(
+        model.providerID,
+        {
+          driver: 'acp',
+          agentId,
+          permissionPolicy: this.acp?.permissionPolicy ?? 'ask',
+        },
+        { logger: this.logger, confirmation: this.acp?.confirmation, runtime }
+      )
+      this.drivers.set(key, driver)
+    }
+    return driver.getModel(agentId)
+  }
+
+  private createTimeoutFetch(): typeof fetch {
+    const { timeoutMs, logger } = this
+    return async (input, init) => {
+      const url = requestUrl(input).slice(0, 120)
+      const method = init?.method || 'POST'
+      const startMs = Date.now()
+      const timeout = AbortSignal.timeout(timeoutMs)
+      const signal = init?.signal ? AbortSignal.any([timeout, init.signal]) : timeout
+
+      logger?.debug?.(`[LLM HTTP] ${method} ${url} | timeout=${timeoutMs}ms`)
+      try {
+        const response = await fetch(input, { ...init, signal })
+        logger?.debug?.(`[LLM HTTP] ${response.status} ${method} ${url} | ${Date.now() - startMs}ms`)
+        return response
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        logger?.error(`[LLM HTTP] FAILED ${method} ${url} | ${Date.now() - startMs}ms | ${msg}`)
+        throw err
+      }
+    }
+  }
+}

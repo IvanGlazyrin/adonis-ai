@@ -1,0 +1,22 @@
+{
+  "openai": {
+    "id": "openai", "name": "OpenAI", "env": ["OPENAI_API_KEY"], "api": "https://api.openai.com/v1", "protocol": "openai",
+    "models": {
+      "gpt-4.1": { "id": "gpt-4.1", "name": "GPT-4.1", "headers": {} },
+      "gpt-4.1-mini": { "id": "gpt-4.1-mini", "name": "GPT-4.1 Mini", "headers": {} }
+    }
+  },
+  "kimi-for-coding": {
+    "id": "kimi-for-coding", "name": "Kimi for Coding", "env": ["KIMI_API_KEY"], "api": "https://api.kimi.com/coding/v1", "npm": "@ai-sdk/anthropic", "protocol": "anthropic",
+    "models": {
+      "k2p5": { "id": "k2p5", "name": "Kimi K2.5", "headers": { "User-Agent": "claude-code/0.1.0", "X-Client-Name": "claude-code" } }
+    }
+  },
+  "openrouter": {
+    "id": "openrouter", "name": "OpenRouter", "env": ["OPENROUTER_API_KEY"], "api": "https://openrouter.ai/api/v1", "npm": "@openrouter/ai-sdk-provider",
+    "models": {
+      "openrouter/hunter-alpha": { "id": "openrouter/hunter-alpha", "name": "Hunter Alpha", "headers": {} },
+      "minimax/minimax-m2.5:free": { "id": "minimax/minimax-m2.5:free", "name": "MiniMax M2.5 (free)", "headers": {} }
+    }
+  }
+}

@@ -104,6 +104,11 @@ export interface AcpDriverDeps {
   confirmation?: ConfirmationService
   /** Environment to derive the agent environment from. Default: `process.env` */
   env?: Record<string, string | undefined>
+  /**
+   * Prebuilt runtime config (e.g. from `buildAcpRuntimeConfig`). Used verbatim, except that `cwd`
+   * must be absolute and the agent environment is rebuilt from `env` plus the runtime's own env.
+   */
+  runtime?: AcpAgentRuntimeConfig
 }
 
 export class AcpDriver implements AiDriver {
@@ -113,6 +118,7 @@ export class AcpDriver implements AiDriver {
   private logger?: Logger
   private confirmation?: ConfirmationService
   private env: Record<string, string | undefined>
+  private runtime?: AcpAgentRuntimeConfig
   private cachedModels: Map<string, Promise<LanguageModel>> = new Map()
   private providers: Set<AcpProviderLike> = new Set()
   private permissionPolicy: AcpPermissionPolicy
@@ -123,6 +129,7 @@ export class AcpDriver implements AiDriver {
     this.logger = deps.logger
     this.confirmation = deps.confirmation
     this.env = deps.env ?? process.env
+    this.runtime = deps.runtime
     this.defaultModel = config.agentId ?? config.defaultModel ?? 'claude-code'
     this.permissionPolicy = config.permissionPolicy ?? 'ask'
 
@@ -188,6 +195,19 @@ export class AcpDriver implements AiDriver {
   }
 
   private resolveRuntimeConfig(agentId: string): AcpAgentRuntimeConfig {
+    if (this.runtime) {
+      if (!path.isAbsolute(this.runtime.cwd)) {
+        throw new ProviderConfigError(
+          this.name,
+          `ACP "cwd" must be an absolute path, got "${this.runtime.cwd}"`
+        )
+      }
+      return {
+        ...this.runtime,
+        env: buildAgentEnv(this.env, this.runtime.env, this.config.inheritEnv),
+      }
+    }
+
     const predefined = getAcpAgentConfig(agentId)
     const explicitCommand = this.config.command
 
