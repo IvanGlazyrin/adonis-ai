@@ -1,1 +1,0 @@
-{"version":3,"file":"errors.d.ts","sourceRoot":"","sources":["../../../src/guard/errors.ts"],"names":[],"mappings":"AAAA;;;GAGG;AACH,qBAAa,oBAAqB,SAAQ,KAAK;aAI3B,QAAQ,EAAE,MAAM;IAHlC,QAAQ,CAAC,IAAI,wBAAuB;gBAGlB,QAAQ,EAAE,MAAM,EAChC,OAAO,EAAE,MAAM;CAKlB"}

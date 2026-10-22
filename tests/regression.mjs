@@ -3,7 +3,7 @@ import { tool } from 'ai'
 import { MockLanguageModelV4, convertArrayToReadableStream } from 'ai/test'
 import { z } from 'zod'
 
-// Run after building all three packages (`npm run build` in each), then: npm run test:regression
+// Run after `npm run build`, then: npm run test:regression
 const P = new URL('../dist/src', import.meta.url).href
 const budget = await import(`${P}/budget/index.js`)
 const guardLib = await import(`${P}/guard/index.js`)

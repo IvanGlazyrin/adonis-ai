@@ -78,9 +78,10 @@
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "clean": "node -e \"fs.rmSync('dist', { recursive: true, force: true })\"",
-    "test:regression": "node tests/regression.mjs && node tests/regression_adonis.mjs"
+    "test:regression": "node tests/regression.mjs && node tests/regression_adonis.mjs",
+    "test": "node --import=@poppinss/ts-exec bin/test.ts"
   },
   "repository": {
     "type": "git",
@@ -108,6 +109,9 @@
     "@adonisjs/core": "^7.4.0",
     "@ai-sdk/anthropic": "^4.0.0",
     "@ai-sdk/openai": "^4.0.0",
+    "@japa/assert": "^4.2.0",
+    "@japa/runner": "^5.4.0",
+    "@poppinss/ts-exec": "^1.5.1",
     "@types/node": "^22.0.0",
     "ai": "^7.0.0",
     "typescript": "^5.0.0 || ^6.0.0"

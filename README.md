@@ -1,4 +1,4 @@
-# adonis-ai
+# adonis-ai-kit
 
 > **Production-grade AI & Agentic workflow toolkit for AdonisJS 7**, powered by Vercel AI SDK v7, multi-provider cascading fallback, circuit breakers, tool security guardrails, token budget tracking, models.dev live catalog, and ACP (Agent Client Protocol) coding agents.
 
@@ -13,9 +13,9 @@
 
 ## Highlights & Architectural Comparison
 
-While frameworks like **Laravel AI** and **Prism** bring basic prompt-level abstractions to PHP, enterprise production systems require strict SRE resilience, tool execution guardrails, cost guarantees, and streaming protocol integrity. **`adonis-ai`** is built from the ground up for high-concurrency Node.js microservices:
+While frameworks like **Laravel AI** and **Prism** bring basic prompt-level abstractions to PHP, enterprise production systems require strict SRE resilience, tool execution guardrails, cost guarantees, and streaming protocol integrity. **`adonis-ai-kit`** is built from the ground up for high-concurrency Node.js microservices:
 
-| Feature | `adonis-ai` (AdonisJS 7) | Laravel AI / Prism (PHP) |
+| Feature | `adonis-ai-kit` (AdonisJS 7) | Laravel AI / Prism (PHP) |
 | :--- | :--- | :--- |
 | **Foundation Engine** | **Vercel AI SDK v7** (native Node.js async streams & tool calls) | Custom cURL/Guzzle wrappers |
 | **Circuit Breaker** | **Per `provider:model` key** (isolated half-open state, probe limits) | Global or none |
@@ -131,7 +131,7 @@ console.log(`Duration: ${result.durationMs}ms, Cost: $${result.costUsd}`)
 console.log(`Tokens: in=${result.usage.inputTokens}, out=${result.usage.outputTokens}, cached=${result.usage.cacheReadTokens}`)
 ```
 
-If OpenAI returns `429 Rate Limit` or `503 Service Unavailable`, `adonis-ai` automatically routes the request to `anthropic` with its configured model, recording circuit breaker metrics.
+If OpenAI returns `429 Rate Limit` or `503 Service Unavailable`, `adonis-ai-kit` automatically routes the request to `anthropic` with its configured model, recording circuit breaker metrics.
 
 ---
 
@@ -264,7 +264,7 @@ const execution = await runner.run({
 
 ## Ace CLI Commands
 
-`adonis-ai` registers helpful Ace commands:
+`adonis-ai-kit` registers helpful Ace commands:
 
 ```bash
 # Test connectivity, latency, and model availability across configured providers

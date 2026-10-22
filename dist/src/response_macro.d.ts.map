@@ -1,1 +1,0 @@
-{"version":3,"file":"response_macro.d.ts","sourceRoot":"","sources":["../../src/response_macro.ts"],"names":[],"mappings":"AAEA,OAAO,KAAK,EAAE,eAAe,EAAE,gBAAgB,EAAE,MAAM,YAAY,CAAA;AAInE;;;;;;;GAOG;AACH,wBAAgB,qBAAqB,SAiJpC;AAGD,OAAO,QAAQ,qBAAqB,CAAC;IACnC,UAAU,YAAY;QACpB,QAAQ,CAAC,YAAY,EAAE,gBAAgB,EAAE,OAAO,CAAC,EAAE,eAAe,GAAG,IAAI,CAAA;KAC1E;CACF"}
