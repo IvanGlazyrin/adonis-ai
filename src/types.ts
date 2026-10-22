@@ -299,7 +299,11 @@ export interface StreamTextResult {
   model: string
   /** Resolves when the stream ends, is aborted, or fails (never rejects, never hangs forever). */
   usage: Promise<TokenUsage>
-  /** Parsed structured output (resolves to `undefined` when no `schema` was given). */
+  /**
+   * Parsed structured output. Resolves to `undefined` when no `schema` was given; may reject when the
+   * stream fails or is aborted, or when the output does not match the schema. With `schema`, the stream
+   * is consumed to completion in the background so this settles even if nothing else reads the stream.
+   */
   output: Promise<unknown>
   toTextStreamResponse(headers?: Record<string, string>): Response
   /** AI SDK UI message stream (compatible with `useChat`). */

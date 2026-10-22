@@ -84,6 +84,71 @@ test.group('AiManager call options', () => {
     assert.deepEqual(await stream.output, { n: 7 })
   })
 
+  test('stream output is undefined without a schema', async ({ assert }) => {
+    const stream = await manager(textModel('hello')).streamText({ prompt: 'x' })
+    await stream.consume()
+    assert.isUndefined(await stream.output)
+  })
+
+  test('stream output rejects promptly when the stream fails mid-way, and unread rejections are not unhandled', async ({
+    assert,
+  }) => {
+    const failing = () =>
+      new MockLanguageModelV4({
+        provider: 'mock',
+        modelId: 'm',
+        doStream: async () => ({
+          stream: convertArrayToReadableStream([
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: '1' },
+            { type: 'text-delta', id: '1', delta: '{"n":' },
+            { type: 'error', error: new Error('mid-stream failure') },
+          ]),
+        }),
+      })
+    const schema = z.object({ n: z.number() })
+    const unhandled: unknown[] = []
+    const handler = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', handler)
+    try {
+      // output read and awaited: rejects within a second
+      const read = await manager(failing()).streamText({ prompt: 'x', schema })
+      const outcome = await Promise.race([
+        read.output.then(
+          () => 'resolved',
+          () => 'rejected'
+        ),
+        new Promise((r) => setTimeout(() => r('timeout'), 1000)),
+      ])
+      assert.equal(outcome, 'rejected')
+
+      // output never read: must not surface as an unhandled rejection
+      const unread = await manager(failing()).streamText({ prompt: 'x', schema })
+      await unread.usage
+      await new Promise((r) => setImmediate(r))
+      await new Promise((r) => setImmediate(r))
+      await new Promise((r) => setTimeout(r, 20))
+      assert.lengthOf(unhandled, 0)
+    } finally {
+      process.off('unhandledRejection', handler)
+    }
+  })
+
+  test('stream output rejects when the text does not match the schema', async ({ assert }) => {
+    const stream = await manager(textModel('not json')).streamText({
+      prompt: 'x',
+      schema: z.object({ n: z.number() }),
+    })
+    const outcome = await Promise.race([
+      stream.output.then(
+        () => 'resolved',
+        () => 'rejected'
+      ),
+      new Promise((r) => setTimeout(() => r('timeout'), 1000)),
+    ])
+    assert.equal(outcome, 'rejected')
+  })
+
   test('maxRetries: 0 reaches the SDK (single attempt on 429)', async ({ assert }) => {
     let calls = 0
     const model = new MockLanguageModelV4({
