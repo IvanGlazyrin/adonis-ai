@@ -297,8 +297,13 @@ registerAcpAgent('my-agent', {
 
 const runtime = buildAcpRuntimeConfig('my-agent', {
   projectMcpPath: './mcp/server.js', // used when ACP_MY_AGENT_PROJECT_MCP_PATH is unset
+  // the project MCP server is still only attached when ACP_MY_AGENT_ENABLE_PROJECT_MCP=true
 })
 ```
+
+ACP agents in a `models` chain ask a human through the manager's `ConfirmationService` (see `getConfirmationService()`), like the provider cascade does.
+
+Calling `buildAcpRuntimeConfig` + `createACPProvider` directly bypasses the env sanitizing that `AcpDriver` applies: the agent then inherits the full server environment.
 
 The `sourcecraft` and `freebuff` default agents are deprecated and will be removed from the defaults in 2.0; register them with `registerAcpAgent()` if you need them.
 
@@ -317,6 +322,7 @@ const result = await ai.generateText({
 })
 result.provider // providerID of the model that answered
 result.model    // its modelID
+// fromModel / toModel are breaker keys: the credential key when the model has one, otherwise provider/model
 ```
 
 - Entries are tried in order. Only retryable failures (429, 5xx, network) move on to the next entry; bad requests,

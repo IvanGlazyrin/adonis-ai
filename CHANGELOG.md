@@ -19,12 +19,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - `models` and `onFallback` to run a call over a dynamic model chain.
 - `AiConfig.resolver` and `AiConfig.languageModels`.
 - Optional `peerDependencies` for the AI SDK provider packages.
+- `LanguageModelFactory` options `acp.inheritEnv` (pass the full server environment to agents) and `acp.shareDriver` (set to `false` to give every model its own driver and agent process).
+
+### Changed
+
+- Optional provider peer dependencies accept any version.
+
+### Fixed
+
+- `CircuitBreaker.execute()` frees its probe slot even if `isFailure` throws.
+- Model chains fall through to the next candidate on missing provider packages, config errors and open breakers (without counting against the breaker), and reject a missing resolver up front.
+- Rejections of an async `onFallback` handler are caught and logged.
+- ACP models in `AiManager` chains use its `ConfirmationService`.
+- `AcpDriver` blanks `process.env` keys that are missing from a custom env source.
 
 ### Notes
 
 - An exhausted `models` chain rethrows the last error (or `ProviderUnavailableError` if no candidate could be attempted), unlike the provider cascade, which throws `CascadingFallbackError`.
 
-## [1.3.0] - 2026-10-22
+## [1.3.0] — not published; included in 1.4.0
 
 ### Added
 
