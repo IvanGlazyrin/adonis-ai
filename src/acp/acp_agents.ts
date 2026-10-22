@@ -7,6 +7,7 @@ import type {
   AcpMcpServerConfig,
   AcpNameValue,
   AcpProjectMcpConfig,
+  AcpRuntimeOptions,
 } from './types.js'
 
 /**
@@ -27,6 +28,7 @@ const DEFAULT_ACP_AGENTS: Record<string, AcpAgentConfig> = Object.freeze({
     args: [],
     envVarPrefix: 'ACP_CLAUDE_CODE',
     supportsMcpServers: true,
+    credentialEnv: [{ target: 'ANTHROPIC_API_KEY', sources: ['ANTHROPIC_API_KEY'] }],
   },
   'gemini': {
     id: 'gemini',
@@ -37,6 +39,7 @@ const DEFAULT_ACP_AGENTS: Record<string, AcpAgentConfig> = Object.freeze({
     envVarPrefix: 'ACP_GEMINI',
     supportsMcpServers: true,
     authMethodId: 'gemini-api-key',
+    credentialEnv: [{ target: 'GEMINI_API_KEY', sources: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'] }],
   },
   'codex': {
     id: 'codex',
@@ -46,6 +49,7 @@ const DEFAULT_ACP_AGENTS: Record<string, AcpAgentConfig> = Object.freeze({
     args: [],
     envVarPrefix: 'ACP_CODEX',
     supportsMcpServers: true,
+    credentialEnv: [{ target: 'OPENAI_API_KEY', sources: ['OPENAI_API_KEY'] }],
   },
   'qwen-code': {
     id: 'qwen-code',
@@ -55,7 +59,9 @@ const DEFAULT_ACP_AGENTS: Record<string, AcpAgentConfig> = Object.freeze({
     args: ['--acp'],
     envVarPrefix: 'ACP_QWEN_CODE',
     supportsMcpServers: true,
+    credentialEnv: [{ target: 'DASHSCOPE_API_KEY', sources: ['DASHSCOPE_API_KEY', 'QWEN_API_KEY'] }],
   },
+  /** @deprecated Removed from defaults in 2.0; register it with registerAcpAgent() */
   'sourcecraft': {
     id: 'sourcecraft',
     name: 'SourceCraft Code Assistant',
@@ -73,7 +79,9 @@ const DEFAULT_ACP_AGENTS: Record<string, AcpAgentConfig> = Object.freeze({
     args: ['acp'],
     envVarPrefix: 'ACP_OPENCODE',
     supportsMcpServers: true,
+    credentialEnv: [{ target: 'OPENCODE_API_KEY', sources: ['OPENCODE_API_KEY'] }],
   },
+  /** @deprecated Removed from defaults in 2.0; register it with registerAcpAgent() */
   'freebuff': {
     id: 'freebuff',
     name: 'Freebuff',
@@ -82,6 +90,10 @@ const DEFAULT_ACP_AGENTS: Record<string, AcpAgentConfig> = Object.freeze({
     args: [],
     envVarPrefix: 'ACP_FREEBUFF',
     supportsMcpServers: true,
+    credentialEnv: [
+      { target: 'CODEBUFF_API_KEY', sources: ['CODEBUFF_API_KEY', 'FREEBUFF_API_KEY'] },
+      { target: 'FREEBUFF_API_KEY', sources: ['CODEBUFF_API_KEY', 'FREEBUFF_API_KEY'] },
+    ],
   },
 })
 
@@ -235,13 +247,34 @@ export function buildProjectMcpServer(
 
 /**
  * Build runtime configuration for an ACP agent.
+ *
+ * The positional form `(agentId, getEnv, envSource, logger)` is kept for compatibility;
+ * a function as the second argument selects it.
  */
 export function buildAcpRuntimeConfig(
   agentId: string,
-  getEnv: (key: string) => string | undefined = (key) => process.env[key],
-  envSource: Record<string, string | undefined> = process.env,
+  options?: AcpRuntimeOptions
+): AcpAgentRuntimeConfig | null
+export function buildAcpRuntimeConfig(
+  agentId: string,
+  getEnv?: (key: string) => string | undefined,
+  envSource?: Record<string, string | undefined>,
   logger?: Logger
+): AcpAgentRuntimeConfig | null
+export function buildAcpRuntimeConfig(
+  agentId: string,
+  optionsOrGetEnv?: AcpRuntimeOptions | ((key: string) => string | undefined),
+  positionalEnvSource?: Record<string, string | undefined>,
+  positionalLogger?: Logger
 ): AcpAgentRuntimeConfig | null {
+  const options: AcpRuntimeOptions =
+    typeof optionsOrGetEnv === 'function'
+      ? { getEnv: optionsOrGetEnv, envSource: positionalEnvSource, logger: positionalLogger }
+      : (optionsOrGetEnv ?? {})
+  const getEnv = options.getEnv ?? ((key: string) => process.env[key])
+  const envSource = options.envSource ?? process.env
+  const { logger } = options
+
   const config = getAcpAgentConfig(agentId)
   if (!config) return null
 
@@ -259,28 +292,10 @@ export function buildAcpRuntimeConfig(
   // Build environment variables
   const env: Record<string, string> = {}
 
-  // Add auth-related env vars based on agent type
-  if (agentId === 'gemini') {
-    const apiKey = getEnv('GEMINI_API_KEY') || getEnv('GOOGLE_API_KEY')
-    if (apiKey) env.GEMINI_API_KEY = apiKey
-  } else if (agentId === 'claude-code') {
-    const apiKey = getEnv('ANTHROPIC_API_KEY')
-    if (apiKey) env.ANTHROPIC_API_KEY = apiKey
-  } else if (agentId === 'codex') {
-    const apiKey = getEnv('OPENAI_API_KEY')
-    if (apiKey) env.OPENAI_API_KEY = apiKey
-  } else if (agentId === 'qwen-code') {
-    const apiKey = getEnv('DASHSCOPE_API_KEY') || getEnv('QWEN_API_KEY')
-    if (apiKey) env.DASHSCOPE_API_KEY = apiKey
-  } else if (agentId === 'opencode') {
-    const apiKey = getEnv('OPENCODE_API_KEY')
-    if (apiKey) env.OPENCODE_API_KEY = apiKey
-  } else if (agentId === 'freebuff') {
-    const apiKey = getEnv('CODEBUFF_API_KEY') || getEnv('FREEBUFF_API_KEY')
-    if (apiKey) {
-      env.CODEBUFF_API_KEY = apiKey
-      env.FREEBUFF_API_KEY = apiKey
-    }
+  // Add the agent's declared credentials: first source that has a value wins
+  for (const { target, sources } of config.credentialEnv ?? []) {
+    const value = sources.map((source) => getEnv(source)).find(Boolean)
+    if (value) env[target] = value
   }
 
   // Add custom env vars from ACP_<AGENT>_ENV_* pattern
@@ -312,7 +327,7 @@ export function buildAcpRuntimeConfig(
 
   // Add the project's MCP server if enabled and an explicit path was given
   if (getEnv(`${prefix}_ENABLE_PROJECT_MCP`) === 'true') {
-    const projectPath = getEnv(`${prefix}_PROJECT_MCP_PATH`)
+    const projectPath = getEnv(`${prefix}_PROJECT_MCP_PATH`) || options.projectMcpPath
     if (projectPath) {
       const server = buildProjectMcpServer({ path: projectPath }, logger)
       if (server) mcpServers.push(server)

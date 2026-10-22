@@ -260,6 +260,25 @@ const execution = await runner.run({
 })
 ```
 
+Agents declare the credentials they need and can receive a project MCP server explicitly:
+
+```ts
+import { registerAcpAgent, buildAcpRuntimeConfig } from 'adonis-ai-kit/acp'
+
+registerAcpAgent('my-agent', {
+  id: 'my-agent', name: 'My Agent', description: '', command: 'my-agent-acp', args: [],
+  envVarPrefix: 'ACP_MY_AGENT', supportsMcpServers: true,
+  // the first set source is passed to the agent process as `target`
+  credentialEnv: [{ target: 'MY_API_KEY', sources: ['MY_API_KEY', 'MY_KEY'] }],
+})
+
+const runtime = buildAcpRuntimeConfig('my-agent', {
+  projectMcpPath: './mcp/server.js', // used when ACP_MY_AGENT_PROJECT_MCP_PATH is unset
+})
+```
+
+The `sourcecraft` and `freebuff` default agents are deprecated and will be removed from the defaults in 2.0; register them with `registerAcpAgent()` if you need them.
+
 ---
 
 ## Ace CLI Commands

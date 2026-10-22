@@ -1,4 +1,5 @@
 import type { BaseProviderConfig } from '../types.js'
+import type { Logger } from '../logger.js'
 
 /** `{ name, value }` pair as required by the ACP schema for `env` and `headers`. */
 export interface AcpNameValue {
@@ -42,6 +43,11 @@ export interface AcpAgentConfig {
   envVarPrefix: string
   supportsMcpServers: boolean
   authMethodId?: string
+  /**
+   * Environment variables the agent needs: for each `target`, the first of `sources`
+   * that is set is passed to the agent process as `target`.
+   */
+  credentialEnv?: Array<{ target: string; sources: string[] }>
 }
 
 export interface AcpAgentRuntimeConfig {
@@ -51,6 +57,16 @@ export interface AcpAgentRuntimeConfig {
   env: Record<string, string>
   mcpServers: AcpMcpServerConfig[]
   authMethodId?: string
+}
+
+export interface AcpRuntimeOptions {
+  /** Environment lookup. Default: `process.env` */
+  getEnv?: (key: string) => string | undefined
+  /** Source scanned for `ACP_<AGENT>_ENV_*` entries. Default: `process.env` */
+  envSource?: Record<string, string | undefined>
+  logger?: Logger
+  /** Project MCP server file, used when `<prefix>_PROJECT_MCP_PATH` is not set. */
+  projectMcpPath?: string
 }
 
 export interface AcpProjectMcpConfig {
