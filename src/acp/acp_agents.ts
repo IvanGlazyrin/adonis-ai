@@ -300,7 +300,9 @@ export function buildAcpRuntimeConfig(
   const env: Record<string, string> = {}
 
   // Add the agent's declared credentials: first source that has a value wins
-  for (const { target, sources } of config.credentialEnv ?? []) {
+  // (an agent registered without credentialEnv inherits the built-in agent's with the same id)
+  const credentialEnv = config.credentialEnv ?? DEFAULT_ACP_AGENTS[agentId]?.credentialEnv ?? []
+  for (const { target, sources } of credentialEnv) {
     const value = sources.map((source) => getEnv(source)).find(Boolean)
     if (value) env[target] = value
   }

@@ -46,6 +46,9 @@ export interface AcpAgentConfig {
   /**
    * Environment variables the agent needs: for each `target`, the first of `sources`
    * that is set is passed to the agent process as `target`.
+   *
+   * When omitted (`undefined`), the `credentialEnv` of the built-in default agent with the
+   * same id is used, if any. An explicit value, including `[]`, is used as-is, so `[]` opts out.
    */
   credentialEnv?: Array<{ target: string; sources: string[] }>
 }

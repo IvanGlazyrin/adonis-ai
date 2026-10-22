@@ -12,9 +12,20 @@ import {
   parseAcpArgs,
   registerAcpAgent,
   resetAcpAgents,
+  setAcpAgents,
 } from '../../../src/acp/acp_agents.js'
 
 const envOf = (vars: Record<string, string>) => (key: string) => vars[key]
+
+const appAgent = (id: string, envVarPrefix: string) => ({
+  id,
+  name: id,
+  description: '',
+  command: 'x',
+  args: [],
+  envVarPrefix,
+  supportsMcpServers: true,
+})
 
 function withTempServers<T>(count: number, run: (files: string[]) => T): T {
   const dir = mkdtempSync(join(tmpdir(), 'acp-project-mcp-'))
@@ -46,6 +57,37 @@ test.group('acp runtime config', (group) => {
     })
     const cfg = buildAcpRuntimeConfig('x', { getEnv: envOf({ X_KEY: 's' }), envSource: {} })
     assert.equal(cfg!.env.X_API_KEY, 's')
+  })
+
+  test('a registered agent without credentialEnv inherits the default agent credentials', ({
+    assert,
+  }) => {
+    setAcpAgents({ 'claude-code': { ...appAgent('claude-code', 'ACP_CLAUDE_CODE') } })
+    const cfg = buildAcpRuntimeConfig('claude-code', {
+      getEnv: envOf({ ANTHROPIC_API_KEY: 'a' }),
+      envSource: {},
+    })
+    assert.equal(cfg!.env.ANTHROPIC_API_KEY, 'a')
+  })
+
+  test('an explicit empty credentialEnv opts out of default credentials', ({ assert }) => {
+    setAcpAgents({
+      'claude-code': { ...appAgent('claude-code', 'ACP_CLAUDE_CODE'), credentialEnv: [] },
+    })
+    const cfg = buildAcpRuntimeConfig('claude-code', {
+      getEnv: envOf({ ANTHROPIC_API_KEY: 'a' }),
+      envSource: {},
+    })
+    assert.isUndefined(cfg!.env.ANTHROPIC_API_KEY)
+  })
+
+  test('a custom agent without defaults or credentialEnv gets no credentials', ({ assert }) => {
+    setAcpAgents({ custom: appAgent('custom', 'ACP_CUSTOM') })
+    const cfg = buildAcpRuntimeConfig('custom', {
+      getEnv: envOf({ ANTHROPIC_API_KEY: 'a', OPENAI_API_KEY: 'o' }),
+      envSource: {},
+    })
+    assert.deepEqual(cfg!.env, {})
   })
 
   test('credentialEnv sets nothing when no source is present', ({ assert }) => {
