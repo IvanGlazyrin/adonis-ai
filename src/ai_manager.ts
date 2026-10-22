@@ -333,7 +333,7 @@ export class AiManager {
         const result = await this.circuitBreaker.execute(
           breakerKey,
           () => operation({ driver, modelName, providerName, state }),
-          (err) => classifyError(err, request.abortSignal).kind === 'retryable'
+          (err) => classifyError(err, request.abortSignal).countsAsFailure
         )
         return { result, provider: providerName, model: modelName }
       } catch (err) {
@@ -585,7 +585,7 @@ export class AiManager {
           onError: ({ error }) => {
             if (!streamStarted) return // surfaced through the first-part check below
             this.logger?.warn?.(`[AiManager] Stream error on "${providerName}:${modelName}": ${String(error)}`)
-            if (classifyError(error, signal).kind === 'retryable') {
+            if (classifyError(error, signal).countsAsFailure) {
               this.circuitBreaker.recordFailure(`${providerName}:${modelName}`, error)
             }
             finish(EMPTY_USAGE, '')

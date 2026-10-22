@@ -1,19 +1,24 @@
 import { AiException, ProviderUnavailableError } from './errors.js'
 
 /**
- * - `retryable`: transient upstream failure; try the next provider and count it against the breaker
+ * - `retryable`: transient upstream failure; try the next provider
  * - `skip`:      this provider cannot serve the request (open breaker, missing package/config);
  *                try the next provider but do not count it against the breaker
  * - `fatal`:     the request itself is wrong or was cancelled; fail immediately, no fallback
+ *
+ * Whether a failure also counts against the circuit breaker is a separate question,
+ * answered by {@link ErrorClassification.countsAsFailure}.
  */
 export type ErrorKind = 'retryable' | 'skip' | 'fatal'
 
 export interface ErrorClassification {
   kind: ErrorKind
   reason: string
+  /** Fine-grained cause; `unknown` for skip / abort / validation outcomes. */
+  errorClass: ErrorClass
+  /** Whether the failure says something about upstream health and should count against the circuit breaker. */
+  countsAsFailure: boolean
 }
-
-const RETRYABLE_STATUS = new Set([408, 409, 425, 429])
 
 const NETWORK_CODES = new Set([
   'ECONNRESET',
@@ -44,62 +49,36 @@ const FATAL_NAMES = new Set([
   'ZodError',
 ])
 
-function statusOf(err: Record<string, any>): number | undefined {
-  const candidates = [err.statusCode, err.status, err.response?.status, err.cause?.statusCode, err.cause?.status]
-  return candidates.find((c): c is number => typeof c === 'number')
-}
-
-function codeOf(err: Record<string, any>): string | undefined {
-  const c = err.code ?? err.cause?.code
-  return typeof c === 'string' ? c : undefined
-}
+const NETWORK_MESSAGE = /fetch failed|network|socket hang up|timed? ?out|connection (reset|refused|closed)/i
 
 /**
- * Classifies an error for fallback / circuit-breaker decisions.
- * `abortSignal` is the caller's signal: when it is aborted the failure is the caller's doing.
+ * Returns the first value `pick` extracts from the error or from its `cause` / `lastError`
+ * chain (AI SDK `RetryError` keeps the real failure in `lastError`), looking at most `depth` levels down.
  */
-export function classifyError(error: unknown, abortSignal?: AbortSignal): ErrorClassification {
-  if (abortSignal?.aborted) return { kind: 'fatal', reason: 'aborted by caller' }
+function findErrorField<T>(
+  error: unknown,
+  pick: (node: Record<string, any>) => T | undefined,
+  depth = 5
+): T | undefined {
+  if (error === null || typeof error !== 'object') return undefined
+  const node = error as Record<string, any>
+  const own = pick(node)
+  if (own !== undefined) return own
+  if (depth <= 0) return undefined
+  return findErrorField(node.cause, pick, depth - 1) ?? findErrorField(node.lastError, pick, depth - 1)
+}
 
-  if (error instanceof ProviderUnavailableError) {
-    return { kind: 'skip', reason: 'circuit breaker open' }
-  }
-  if (
-    error instanceof AiException &&
-    (error.code === 'E_AI_MISSING_DEPENDENCY' || error.code === 'E_AI_CONFIG_ERROR')
-  ) {
-    return { kind: 'skip', reason: error.code }
-  }
+const asNumber = (v: unknown) => (typeof v === 'number' ? v : undefined)
 
-  if (error === null || typeof error !== 'object') {
-    return { kind: 'fatal', reason: 'unknown error' }
-  }
-  const err = error as Record<string, any>
+function statusOf(error: unknown): number | undefined {
+  return findErrorField(
+    error,
+    (n) => asNumber(n.statusCode) ?? asNumber(n.status) ?? asNumber(n.response?.status)
+  )
+}
 
-  if (err.name === 'AbortError') return { kind: 'fatal', reason: 'aborted' }
-  if (FATAL_NAMES.has(err.name)) return { kind: 'fatal', reason: `validation (${err.name})` }
-
-  const status = statusOf(err)
-  if (status !== undefined) {
-    if (status >= 500 || RETRYABLE_STATUS.has(status)) {
-      return { kind: 'retryable', reason: `HTTP ${status}` }
-    }
-    return { kind: 'fatal', reason: `HTTP ${status}` }
-  }
-
-  if (err.name === 'TimeoutError') return { kind: 'retryable', reason: 'timeout' }
-
-  const code = codeOf(err)
-  if (code && NETWORK_CODES.has(code)) return { kind: 'retryable', reason: `network (${code})` }
-
-  const message = typeof err.message === 'string' ? err.message : ''
-  if (/fetch failed|network|socket hang up|timed? ?out|connection (reset|refused|closed)/i.test(message)) {
-    return { kind: 'retryable', reason: 'network' }
-  }
-
-  if (err.isRetryable === true) return { kind: 'retryable', reason: 'provider marked retryable' }
-
-  return { kind: 'fatal', reason: 'unclassified error' }
+function codeOf(error: unknown): string | undefined {
+  return findErrorField(error, (n) => (typeof n.code === 'string' ? n.code : undefined))
 }
 
 /**
@@ -111,7 +90,7 @@ export function classifyError(error: unknown, abortSignal?: AbortSignal): ErrorC
  */
 export type ErrorClass =
   | 'rate_limit' // 429
-  | 'overloaded' // 529
+  | 'overloaded' // 529, 409, 425
   | 'timeout' // 408
   | 'auth_error' // 401, 403
   | 'model_not_found' // 404
@@ -122,36 +101,14 @@ export type ErrorClass =
   | 'no_output_generated' // AI SDK: model produced no output (transient)
   | 'unknown'
 
-/** Extracts the HTTP status code from an error or from its `cause` chain. */
-function classStatusCode(error: unknown): number | null {
-  if (error && typeof error === 'object') {
-    if ('statusCode' in error) {
-      const code = (error as { statusCode: unknown }).statusCode
-      if (typeof code === 'number') return code
-    }
-    if ('cause' in error) {
-      const cause = (error as { cause: unknown }).cause
-      if (cause && typeof cause === 'object' && 'cause' in cause) {
-        return classStatusCode(cause)
-      }
-    }
-  }
-  return null
-}
-
-function classByStatusCode(status: number, error: unknown): ErrorClass {
+function classByStatusCode(status: number, message: string): ErrorClass {
   if (status === 429) return 'rate_limit'
-  if (status === 529) return 'overloaded'
+  if (status === 529 || status === 409 || status === 425) return 'overloaded'
   if (status === 408) return 'timeout'
   if (status === 401 || status === 403) return 'auth_error'
   if (status === 404) return 'model_not_found'
   if (status === 400) {
-    const message = error instanceof Error ? error.message : String(error)
-    if (
-      message.includes('too long') ||
-      message.includes('max_tokens') ||
-      message.includes('context length')
-    ) {
+    if (message.includes('too long') || message.includes('max_tokens') || message.includes('context length')) {
       return 'prompt_too_long'
     }
     return 'invalid_request'
@@ -162,35 +119,32 @@ function classByStatusCode(status: number, error: unknown): ErrorClass {
 
 /**
  * Classifies an error into the fine-grained {@link ErrorClass} taxonomy.
+ * The HTTP status and error code are looked up through the `cause` / `lastError` chain.
  */
 export function classifyErrorClass(error: unknown): ErrorClass {
-  const statusCode = classStatusCode(error)
-  if (statusCode !== null) {
-    return classByStatusCode(statusCode, error)
-  }
+  const isObject = error !== null && typeof error === 'object'
+  const name = isObject ? (error as { name?: unknown }).name : undefined
+  const message = isObject ? String((error as { message?: unknown }).message ?? '') : ''
 
-  if (error instanceof Error) {
-    if (error.name === 'AI_NoOutputGeneratedError' || error.name === 'NoOutputGeneratedError') {
-      const message = error.message
-      if (message.includes('403') || message.includes('401')) return 'auth_error'
-      if (message.includes('429')) return 'rate_limit'
-      if (message.includes('500') || message.includes('502') || message.includes('503')) {
-        return 'server_error'
-      }
-      return 'no_output_generated'
-    }
-    if (
-      error.message.includes('fetch failed') ||
-      error.message.includes('ECONNREFUSED') ||
-      error.message.includes('ENOTFOUND')
-    ) {
-      return 'network_error'
-    }
-    if (error.message.includes('timeout') || error.message.includes('ETIMEDOUT')) return 'timeout'
-    if (error.message.includes('too long') || error.message.includes('context length')) {
-      return 'prompt_too_long'
-    }
+  const status = statusOf(error)
+  if (status !== undefined) return classByStatusCode(status, message)
+
+  if (name === 'AI_NoOutputGeneratedError' || name === 'NoOutputGeneratedError') {
+    if (message.includes('403') || message.includes('401')) return 'auth_error'
+    if (message.includes('429')) return 'rate_limit'
+    if (message.includes('500') || message.includes('502') || message.includes('503')) return 'server_error'
+    return 'no_output_generated'
   }
+  if (name === 'TimeoutError') return 'timeout'
+
+  const code = codeOf(error)
+  if (code && NETWORK_CODES.has(code)) return 'network_error'
+
+  if (message.includes('fetch failed') || message.includes('ECONNREFUSED') || message.includes('ENOTFOUND')) {
+    return 'network_error'
+  }
+  if (message.includes('timeout') || message.includes('ETIMEDOUT')) return 'timeout'
+  if (message.includes('too long') || message.includes('context length')) return 'prompt_too_long'
 
   return 'unknown'
 }
@@ -210,6 +164,65 @@ const RETRYABLE_ERROR_CLASSES: ReadonlySet<ErrorClass> = new Set([
  */
 export function isRetryableError(errorClass: ErrorClass): boolean {
   return RETRYABLE_ERROR_CLASSES.has(errorClass)
+}
+
+const BREAKER_ERROR_CLASSES: ReadonlySet<ErrorClass> = new Set([
+  'rate_limit',
+  'overloaded',
+  'timeout',
+  'server_error',
+  'network_error',
+])
+
+/**
+ * Whether an error class reflects upstream health and should count against the circuit breaker.
+ * `prompt_too_long` and `no_output_generated` fall back to another model but never open the breaker.
+ */
+export function countsAsBreakerFailure(errorClass: ErrorClass): boolean {
+  return BREAKER_ERROR_CLASSES.has(errorClass)
+}
+
+/**
+ * Classifies an error for fallback / circuit-breaker decisions.
+ * `abortSignal` is the caller's signal: when it is aborted the failure is the caller's doing.
+ */
+export function classifyError(error: unknown, abortSignal?: AbortSignal): ErrorClassification {
+  const outcome = (kind: ErrorKind, reason: string, errorClass: ErrorClass = 'unknown'): ErrorClassification => ({
+    kind,
+    reason,
+    errorClass,
+    countsAsFailure: kind === 'retryable' && countsAsBreakerFailure(errorClass),
+  })
+
+  if (abortSignal?.aborted) return outcome('fatal', 'aborted by caller')
+
+  if (error instanceof ProviderUnavailableError) return outcome('skip', 'circuit breaker open')
+  if (
+    error instanceof AiException &&
+    (error.code === 'E_AI_MISSING_DEPENDENCY' || error.code === 'E_AI_CONFIG_ERROR')
+  ) {
+    return outcome('skip', error.code)
+  }
+
+  if (error === null || typeof error !== 'object') return outcome('fatal', 'unknown error')
+  const err = error as Record<string, any>
+
+  if (err.name === 'AbortError') return outcome('fatal', 'aborted')
+  if (FATAL_NAMES.has(err.name)) return outcome('fatal', `validation (${err.name})`)
+
+  const errorClass = classifyErrorClass(error)
+  if (isRetryableError(errorClass)) return outcome('retryable', errorClass, errorClass)
+  if (errorClass !== 'unknown') return outcome('fatal', errorClass, errorClass)
+
+  // Unclassified: keep the loose heuristics, but never override an explicit HTTP status.
+  if (statusOf(error) === undefined) {
+    if (NETWORK_MESSAGE.test(typeof err.message === 'string' ? err.message : '')) {
+      return outcome('retryable', 'network', 'network_error')
+    }
+    if (err.isRetryable === true) return outcome('retryable', 'provider marked retryable')
+  }
+
+  return outcome('fatal', 'unclassified error')
 }
 
 /**

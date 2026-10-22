@@ -131,7 +131,7 @@ console.log(`Duration: ${result.durationMs}ms, Cost: $${result.costUsd}`)
 console.log(`Tokens: in=${result.usage.inputTokens}, out=${result.usage.outputTokens}, cached=${result.usage.cacheReadTokens}`)
 ```
 
-If OpenAI returns `429 Rate Limit` or `503 Service Unavailable`, `adonis-ai-kit` automatically routes the request to `anthropic` with its configured model, recording circuit breaker metrics.
+If OpenAI returns `429 Rate Limit` or `503 Service Unavailable`, `adonis-ai-kit` automatically routes the request to `anthropic` with its configured model, recording circuit breaker metrics. A `prompt_too_long` failure also moves on to the next model, but never counts against (or opens) the circuit breaker.
 
 ---
 
