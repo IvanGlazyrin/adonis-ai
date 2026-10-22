@@ -267,10 +267,17 @@ export function buildAcpRuntimeConfig(
   positionalEnvSource?: Record<string, string | undefined>,
   positionalLogger?: Logger
 ): AcpAgentRuntimeConfig | null {
-  const options: AcpRuntimeOptions =
-    typeof optionsOrGetEnv === 'function'
-      ? { getEnv: optionsOrGetEnv, envSource: positionalEnvSource, logger: positionalLogger }
-      : (optionsOrGetEnv ?? {})
+  // Positional form: getEnv is a function, or explicitly undefined with trailing arguments.
+  const isPositional =
+    typeof optionsOrGetEnv === 'function' ||
+    (optionsOrGetEnv === undefined && arguments.length > 2)
+  const options: AcpRuntimeOptions = isPositional
+    ? {
+        getEnv: optionsOrGetEnv as ((key: string) => string | undefined) | undefined,
+        envSource: positionalEnvSource,
+        logger: positionalLogger,
+      }
+    : ((optionsOrGetEnv as AcpRuntimeOptions | undefined) ?? {})
   const getEnv = options.getEnv ?? ((key: string) => process.env[key])
   const envSource = options.envSource ?? process.env
   const { logger } = options

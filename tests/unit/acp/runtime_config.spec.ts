@@ -127,7 +127,16 @@ test.group('acp runtime config', (group) => {
     assert.lengthOf(warnings, 1)
   })
 
-  test('options form reads process.env by default', ({ assert }) => {
+  test('positional form with undefined getEnv still honors envSource and logger', ({ assert }) => {
+    const warnings: string[] = []
+    const cfg = buildAcpRuntimeConfig('gemini', undefined, { ACP_GEMINI_ENV_FOO: 'bar' }, {
+      warn: (m: string) => warnings.push(m),
+    } as never)
+    assert.equal(cfg!.env.FOO, 'bar')
+    assert.deepEqual(warnings, [])
+  })
+
+  test('options form reads process.env by default',({ assert }) => {
     assert.isNotNull(buildAcpRuntimeConfig('codex'))
     assert.isNotNull(buildAcpRuntimeConfig('codex', {}))
   })
