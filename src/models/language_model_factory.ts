@@ -122,9 +122,9 @@ export class LanguageModelFactory {
   }
 
   /**
-   * Wraps a per-call model so its driver is tracked only while a call is in flight and shut down
-   * when the last call ends (result, error, stream end or cancel). A model that is never called
-   * is not tracked, so it is collected together with its driver.
+   * Wraps a per-call model so its driver is tracked only while a call is in flight (so shutdown()
+   * can stop it) and released when the last call ends (result, error, stream end or cancel). A model
+   * that is never called is not tracked, so it is collected together with its driver.
    */
   private releaseWhenCallEnds(driver: AcpDriver, model: LanguageModel): LanguageModel {
     if (typeof model !== 'object' || model === null) return model
@@ -133,12 +133,12 @@ export class LanguageModelFactory {
       inFlight++
       this.unsharedDrivers.add(driver)
     }
+    // The ACP model cleans up its own agent process at the end of each turn. The driver is not shut
+    // down here: that would drop its provider, and a later step of the same call would then start a
+    // process that factory.shutdown() could no longer reach.
     const end = () => {
       if (--inFlight > 0) return
-      if (!this.unsharedDrivers.delete(driver)) return // shutdown() already stopped it
-      void driver
-        .shutdown()
-        .catch((err) => this.logger?.warn(`[LLM Provider] ACP driver shutdown failed: ${String(err)}`))
+      this.unsharedDrivers.delete(driver)
     }
 
     return new Proxy(model as object, {

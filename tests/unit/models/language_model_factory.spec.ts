@@ -134,7 +134,7 @@ test.group('LanguageModelFactory ACP options', () => {
     })
   })
 
-  test('shareDriver: false releases each driver when its call ends', async ({ assert }) => {
+  test('shareDriver: false stops tracking each driver when its call ends', async ({ assert }) => {
     const original = AcpDriver.prototype.getModel
     const originalShutdown = AcpDriver.prototype.shutdown
     const stopped: AcpDriver[] = []
@@ -174,7 +174,7 @@ test.group('LanguageModelFactory ACP options', () => {
       const second = await cancelled.doStream({})
       await second.stream.cancel()
       assert.equal(tracked(), 0)
-      assert.lengthOf(stopped, 5)
+      assert.lengthOf(stopped, 0, 'the ACP model cleans up its own process; the factory only stops in-flight drivers')
     } finally {
       AcpDriver.prototype.getModel = original
       AcpDriver.prototype.shutdown = originalShutdown
@@ -223,6 +223,55 @@ test.group('LanguageModelFactory ACP options', () => {
       finish()
       await call
       assert.lengthOf(stopped, 1, 'not stopped twice')
+    } finally {
+      AcpDriver.prototype.getModel = original
+      AcpDriver.prototype.shutdown = originalShutdown
+    }
+  })
+
+  test('shutdown during a later step of a multi-step call stops the driver once', async ({ assert }) => {
+    const original = AcpDriver.prototype.getModel
+    const originalShutdown = AcpDriver.prototype.shutdown
+    const stopped: AcpDriver[] = []
+    let closeStream!: () => void
+    let calls = 0
+    AcpDriver.prototype.getModel = async function () {
+      return {
+        doStream: async () => ({
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue('a')
+              if (++calls === 1) controller.close()
+              else closeStream = () => controller.close()
+            },
+          }),
+        }),
+      } as any
+    }
+    AcpDriver.prototype.shutdown = async function (this: AcpDriver) {
+      stopped.push(this)
+    }
+    try {
+      const factory = new LanguageModelFactory({ acp: { shareDriver: false } })
+      const tracked = () => (factory as any).unsharedDrivers.size
+      const model = (await factory.create(acpModel(process.cwd()) as any)) as any
+
+      const step1 = await model.doStream({})
+      const reader1 = step1.stream.getReader()
+      while (!(await reader1.read()).done);
+      assert.equal(tracked(), 0, 'not tracked after a completed call')
+      assert.lengthOf(stopped, 0)
+
+      const step2 = await model.doStream({})
+      assert.equal(tracked(), 1, 'tracked again while step 2 is in flight')
+      await factory.shutdown()
+      assert.lengthOf(stopped, 1)
+
+      closeStream()
+      const reader2 = step2.stream.getReader()
+      while (!(await reader2.read()).done);
+      assert.lengthOf(stopped, 1, 'not stopped twice')
+      assert.equal(tracked(), 0)
     } finally {
       AcpDriver.prototype.getModel = original
       AcpDriver.prototype.shutdown = originalShutdown
